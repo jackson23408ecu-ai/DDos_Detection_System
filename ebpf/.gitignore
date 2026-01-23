@@ -1,0 +1,14 @@
+# 编译产物
+*.o
+xdp_flow_user
+
+# CO-RE 自动生成
+vmlinux.h
+
+# 临时文件
+*.log
+*.tmp
+
+# 编辑器
+.vscode/
+.idea/
