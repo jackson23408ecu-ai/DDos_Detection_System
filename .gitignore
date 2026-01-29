@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.venv/
+venv/
+
+# Logs / runtime outputs
+logs/
+log/
+*.log
+*.jsonl
+
+# eBPF build outputs
+*.o
+*.skel.h
+*.bpf.o
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+
+# VM shared / temp
+*.swp
+*.tmp

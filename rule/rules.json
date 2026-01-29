@@ -1,0 +1,21 @@
+{
+  "thresholds": {
+    "pps_high": 2000,
+    "bps_high": 5000000,
+    "uniq_src_high": 50,
+    "uniq_flow5_high": 200,
+    "syn_ratio_high": 0.6,
+    "syn_only_ratio_high": 0.3
+  },
+  "weights": {
+    "pps_high": 3,
+    "bps_high": 2,
+    "uniq_src_high": 2,
+    "uniq_flow5_high": 2,
+    "syn_ratio_high": 3,
+    "syn_only_ratio_high": 3
+  },
+  "decision": {
+    "suspect_score": 4
+  }
+}

@@ -1,0 +1,690 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DDoS Detection Dashboard</title>
+  <style>
+    :root{
+      --bg:#0b1220;
+      --panel:#0f1b33;
+      --card:#111f3d;
+      --muted:#9aa7c7;
+      --text:#e8eefc;
+      --line:#23365f;
+      --ok:#2ecc71;
+      --warn:#f39c12;
+      --bad:#e74c3c;
+      --chip:#162a52;
+      --tablebg:#0d1730;
+      --thead:#0f2246;
+    }
+    *{ box-sizing:border-box; }
+    body{
+      margin:0;
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+      background: linear-gradient(180deg, var(--bg), #070c16);
+      color:var(--text);
+    }
+    header{
+      padding:16px 18px;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+      background: rgba(15,27,51,0.55);
+      backdrop-filter: blur(8px);
+      position: sticky; top:0; z-index: 5;
+    }
+    h1{ margin:0; font-size:18px; letter-spacing:.2px; }
+    .sub{ margin-top:6px; font-size:12px; color:var(--muted); }
+    .wrap{ padding:16px 18px 22px; max-width: 1400px; margin:0 auto; }
+
+    .topbar{
+      display:flex; gap:10px; align-items:center; flex-wrap:wrap;
+      margin: 14px 0 14px;
+    }
+    .badge{
+      padding:6px 10px;
+      border-radius: 999px;
+      font-size:12px;
+      background: rgba(255,255,255,0.06);
+      border:1px solid rgba(255,255,255,0.08);
+      display:inline-flex; align-items:center; gap:8px;
+    }
+    .dot{ width:8px; height:8px; border-radius:999px; background: var(--warn); display:inline-block;}
+    .badge.ok .dot{ background: var(--ok); }
+    .badge.warn .dot{ background: var(--warn); }
+    .badge.bad .dot{ background: var(--bad); }
+
+    button{
+      padding:9px 12px;
+      background: rgba(255,255,255,0.06);
+      color: var(--text);
+      border:1px solid rgba(255,255,255,0.10);
+      border-radius:10px;
+      cursor:pointer;
+    }
+    button:hover{ background: rgba(255,255,255,0.10); }
+    button.primary{ background: rgba(46,204,113,0.18); border-color: rgba(46,204,113,0.35); }
+    button.primary:hover{ background: rgba(46,204,113,0.26); }
+
+    select,input{
+      padding:9px 10px;
+      border-radius:10px;
+      border:1px solid rgba(255,255,255,0.10);
+      background: rgba(255,255,255,0.04);
+      color: var(--text);
+      outline:none;
+    }
+    label{ font-size:12px; color: var(--muted); display:flex; align-items:center; gap:8px; }
+
+    .grid{
+      display:grid;
+      grid-template-columns: repeat(12, minmax(0, 1fr));
+      gap:12px;
+      margin-top: 10px;
+    }
+    .card{
+      background: rgba(17,31,61,0.85);
+      border:1px solid rgba(255,255,255,0.08);
+      border-radius:16px;
+      padding:12px 12px;
+      box-shadow: 0 12px 30px rgba(0,0,0,0.25);
+    }
+    .card .k{ font-size:12px; color: var(--muted); }
+    .card .v{ font-size:22px; font-weight: 750; margin-top: 6px; }
+    .card .s{ font-size:12px; color: var(--muted); margin-top: 6px; line-height:1.35; }
+    .chip{
+      display:inline-flex; align-items:center; gap:8px;
+      padding:6px 10px;
+      border-radius:999px;
+      background: rgba(22,42,82,0.9);
+      border:1px solid rgba(255,255,255,0.08);
+      font-size:12px;
+      color: var(--text);
+    }
+
+    .chartWrap{ padding: 10px; }
+    canvas{ width:100%; height: 210px; display:block; }
+
+    .tableCard{ padding: 0; overflow:hidden; background: rgba(13,23,48,0.75); }
+    .tableTop{
+      display:flex; justify-content:space-between; align-items:center;
+      padding: 10px 12px;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+      background: rgba(15,34,70,0.4);
+    }
+    .tableTop .title{ font-weight:700; }
+    .tableTop .hint{ font-size:12px; color: var(--muted); }
+
+    table{
+      width:100%;
+      border-collapse: collapse;
+      font-size: 12px;
+      background: transparent;
+    }
+    thead th{
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      background: rgba(15,34,70,0.95);
+      color: var(--text);
+      text-align:left;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+      padding: 9px 10px;
+      white-space: nowrap;
+    }
+    tbody td{
+      padding: 8px 10px;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+      color: rgba(232,238,252,0.92);
+      white-space: nowrap;
+    }
+    tbody tr:hover{ background: rgba(255,255,255,0.04); }
+    tr.suspect{ background: rgba(243,156,18,0.10); }
+    tr.attack{ background: rgba(231,76,60,0.12); }
+    .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+
+    .foot{
+      margin-top: 10px;
+      font-size:12px;
+      color: var(--muted);
+    }
+    .right { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+
+    @media (max-width: 900px){
+      .grid{ grid-template-columns: repeat(6, minmax(0,1fr)); }
+    }
+  </style>
+</head>
+
+<body>
+<header>
+  <h1>DDoS Detection Dashboard</h1>
+  <div class="sub">实时来源 <span class="mono">/api/stream</span> · 历史来源 <span class="mono">/api/events</span></div>
+</header>
+
+<div class="wrap">
+  <div class="topbar">
+    <span id="statusBadge" class="badge warn"><span class="dot"></span><span id="statusText">连接中...</span></span>
+
+    <button id="btnLoad" class="primary">加载最近事件</button>
+    <button id="btnPause">暂停</button>
+    <button id="btnClear">清空</button>
+
+    <label>过滤
+      <select id="filterMode">
+        <option value="ALL">全部</option>
+        <option value="ALERTS">只看告警(suspect+attack)</option>
+        <option value="attack">attack</option>
+        <option value="suspect">suspect</option>
+        <option value="benign">benign</option>
+      </select>
+    </label>
+
+    <label>显示条数
+      <input id="maxRows" type="number" value="200" min="20" max="2000" style="width:110px;">
+    </label>
+
+    <label>图表窗口(秒)
+      <input id="chartWindow" type="number" value="60" min="10" max="600" style="width:110px;">
+    </label>
+
+    <span class="chip">提示：切到“只看告警”更直观</span>
+  </div>
+
+  <div class="grid">
+    <div class="card" style="grid-column: span 3;">
+      <div class="k">最新状态</div>
+      <div class="v" id="lastLabel">-</div>
+      <div class="s" id="lastAttackType">attack_type: -</div>
+      <div class="s" id="lastTs">ts: -</div>
+    </div>
+
+    <div class="card" style="grid-column: span 3;">
+      <div class="k">最新评分</div>
+      <div class="v"><span id="lastScore">-</span> <span class="mono" style="font-size:12px;color:var(--muted)">confidence=<span id="lastConf">-</span></span></div>
+      <div class="s" id="lastReasons">reasons: -</div>
+    </div>
+
+    <div class="card" style="grid-column: span 3;">
+      <div class="k">最新 PPS / BPS</div>
+      <div class="v"><span id="lastPps">-</span> / <span id="lastBps">-</span></div>
+      <div class="s" id="lastFlow">uniq_src / uniq_flow5: - / -</div>
+    </div>
+
+    <div class="card" style="grid-column: span 3;">
+      <div class="k">统计(本页会话)</div>
+      <div class="v">
+        <span style="color:var(--ok)">benign <span id="cntBenign">0</span></span>
+        · <span style="color:var(--warn)">suspect <span id="cntSuspect">0</span></span>
+        · <span style="color:var(--bad)">attack <span id="cntAttack">0</span></span>
+      </div>
+      <div class="s">最高 PPS: <span id="maxPps">0</span> · 最高 BPS: <span id="maxBps">0</span></div>
+    </div>
+
+    <div class="card chartWrap" style="grid-column: span 8;">
+      <div class="k">最近窗口趋势（PPS / BPS）</div>
+      <canvas id="chart" width="1200" height="420"></canvas>
+      <div class="s">说明：图表按“每条事件”的时间序列绘制，窗口长度由上方“图表窗口(秒)”控制。</div>
+    </div>
+
+    <div class="card" style="grid-column: span 4;">
+      <div class="k">最近一次告警（suspect / attack）</div>
+      <div class="v" id="lastAlertLabel">暂无</div>
+      <div class="s" id="lastAlertMeta">-</div>
+      <div class="s" id="lastAlertReasons">-</div>
+      <div class="s" id="lastAlertTop">-</div>
+    </div>
+
+    <div class="card tableCard" style="grid-column: span 12;">
+      <div class="tableTop">
+        <div class="title">实时事件表</div>
+        <div class="right">
+          <span class="hint">最新在最上面 · suspect/attack 自动高亮</span>
+        </div>
+      </div>
+      <div style="overflow:auto; max-height: 520px;">
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>时间</th>
+              <th>label</th>
+              <th>attack_type</th>
+              <th>score</th>
+              <th>conf</th>
+              <th>pps</th>
+              <th>bps</th>
+              <th>uniq_src</th>
+              <th>uniq_flow5</th>
+              <th>syn_ratio</th>
+              <th>syn_only_ratio</th>
+              <th>top_src_ip</th>
+              <th>top_dport</th>
+              <th>reasons</th>
+            </tr>
+          </thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="foot">
+    如果页面没数据：确认规则引擎写入 <span class="mono">logs/events.jsonl</span>，并从项目根目录启动 Flask：<span class="mono">python3 web/app.py</span>
+  </div>
+</div>
+
+<script>
+  // ---------- DOM ----------
+  const statusBadge = document.getElementById("statusBadge");
+  const statusText  = document.getElementById("statusText");
+
+  const tbody = document.getElementById("tbody");
+  const filterMode = document.getElementById("filterMode");
+  const maxRowsInput = document.getElementById("maxRows");
+  const chartWindowInput = document.getElementById("chartWindow");
+
+  const lastLabel = document.getElementById("lastLabel");
+  const lastAttackType = document.getElementById("lastAttackType");
+  const lastTs = document.getElementById("lastTs");
+  const lastScore = document.getElementById("lastScore");
+  const lastConf = document.getElementById("lastConf");
+  const lastReasons = document.getElementById("lastReasons");
+  const lastPps = document.getElementById("lastPps");
+  const lastBps = document.getElementById("lastBps");
+  const lastFlow = document.getElementById("lastFlow");
+
+  const cntBenign = document.getElementById("cntBenign");
+  const cntSuspect = document.getElementById("cntSuspect");
+  const cntAttack = document.getElementById("cntAttack");
+  const maxPpsEl = document.getElementById("maxPps");
+  const maxBpsEl = document.getElementById("maxBps");
+
+  const lastAlertLabel = document.getElementById("lastAlertLabel");
+  const lastAlertMeta = document.getElementById("lastAlertMeta");
+  const lastAlertReasons = document.getElementById("lastAlertReasons");
+  const lastAlertTop = document.getElementById("lastAlertTop");
+
+  // ---------- State ----------
+  let rowCount = 0;
+  let store = [];           // all received events
+  let paused = false;
+  let es = null;
+
+  let cBenign = 0, cSuspect = 0, cAttack = 0;
+  let maxPps = 0, maxBps = 0;
+
+  // Chart points: [{ts, pps, bps, labelClass}]
+  let points = [];
+
+  // ---------- Helpers ----------
+  function fmtTime(ts){
+    if (!ts) return "-";
+    const d = new Date(ts * 1000);
+    return d.toLocaleString();
+  }
+  function safeGet(obj, path, fallback="-"){
+    try { return path.split(".").reduce((o,k)=>o[k], obj) ?? fallback; }
+    catch { return fallback; }
+  }
+  function formatTopList(arr, n=2){
+    if (!Array.isArray(arr) || arr.length === 0) return "-";
+    return arr.slice(0, n).map(x => `${x[0]}(${x[1]})`).join(", ");
+  }
+  function classify(ev){
+    const label = (ev.label || "").toLowerCase();
+    const at = (ev.attack_type || "").toUpperCase();
+    if (label === "attack" || (at && at !== "BENIGN" && at !== "UNKNOWN")) return "attack";
+    if (label === "suspect") return "suspect";
+    return "benign";
+  }
+  function passesFilter(ev){
+    const f = filterMode.value;
+    const cls = classify(ev);
+    if (f === "ALL") return true;
+    if (f === "ALERTS") return (cls === "suspect" || cls === "attack");
+    return cls === f;
+  }
+
+  function updateSummary(ev){
+    lastLabel.textContent = ev.label ?? "-";
+    lastAttackType.textContent = `attack_type: ${ev.attack_type ?? "-"}`;
+    lastTs.textContent = `ts: ${fmtTime(ev.ts)}`;
+
+    lastScore.textContent = `${ev.score ?? 0}`;
+    lastConf.textContent = `${ev.confidence ?? 0}`;
+
+    const rs = Array.isArray(ev.reasons) ? ev.reasons.slice(0, 4).join(", ") : "-";
+    lastReasons.textContent = `reasons: ${rs || "-"}`;
+
+    const pps = Number(safeGet(ev, "features.pps", 0)) || 0;
+    const bps = Number(safeGet(ev, "features.bps", 0)) || 0;
+    lastPps.textContent = `${pps}`;
+    lastBps.textContent = `${bps}`;
+
+    lastFlow.textContent = `uniq_src / uniq_flow5: ${safeGet(ev,"features.uniq_src",0)} / ${safeGet(ev,"features.uniq_flow5",0)}`;
+
+    // update stats
+    const cls = classify(ev);
+    if (cls === "benign") cBenign++;
+    if (cls === "suspect") cSuspect++;
+    if (cls === "attack") cAttack++;
+    cntBenign.textContent = cBenign;
+    cntSuspect.textContent = cSuspect;
+    cntAttack.textContent = cAttack;
+
+    if (pps > maxPps) maxPps = pps;
+    if (bps > maxBps) maxBps = bps;
+    maxPpsEl.textContent = maxPps;
+    maxBpsEl.textContent = maxBps;
+
+    // update last alert card
+    if (cls === "suspect" || cls === "attack"){
+      lastAlertLabel.textContent = `${cls.toUpperCase()} · score=${ev.score ?? 0}`;
+      lastAlertMeta.textContent = `时间: ${fmtTime(ev.ts)} · PPS=${pps} · BPS=${bps}`;
+      const reasons = Array.isArray(ev.reasons) ? ev.reasons.join("; ") : "-";
+      lastAlertReasons.textContent = `原因: ${reasons}`;
+      const topSrc = formatTopList(safeGet(ev, "features.top_src_ip", []), 3);
+      const topDp  = formatTopList(safeGet(ev, "features.top_dport", []), 3);
+      lastAlertTop.textContent = `Top Src: ${topSrc} | Top Dport: ${topDp}`;
+    }
+  }
+
+  // ---------- Table ----------
+  function appendRow(ev, pushStore=true){
+    if (pushStore) store.push(ev);
+
+    if (!passesFilter(ev)) return;
+
+    const maxRows = parseInt(maxRowsInput.value || "200", 10);
+    const displayed = tbody.querySelectorAll("tr").length;
+    if (displayed >= maxRows){
+      rebuildTable();
+      return;
+    }
+
+    rowCount += 1;
+    const tr = document.createElement("tr");
+    const cls = classify(ev);
+    if (cls === "suspect") tr.classList.add("suspect");
+    if (cls === "attack") tr.classList.add("attack");
+
+    const pps = safeGet(ev,"features.pps",0);
+    const bps = safeGet(ev,"features.bps",0);
+    const uniqSrc = safeGet(ev,"features.uniq_src",0);
+    const uniqFlow5 = safeGet(ev,"features.uniq_flow5",0);
+    const synRatio = safeGet(ev,"features.syn_ratio",0);
+    const synOnlyRatio = safeGet(ev,"features.syn_only_ratio",0);
+    const topSrc = formatTopList(safeGet(ev,"features.top_src_ip",[]), 2);
+    const topDport = formatTopList(safeGet(ev,"features.top_dport",[]), 2);
+    const reasons = Array.isArray(ev.reasons) ? ev.reasons.join("; ") : "-";
+
+    tr.innerHTML = `
+      <td class="mono">${rowCount}</td>
+      <td>${fmtTime(ev.ts)}</td>
+      <td>${ev.label ?? "-"}</td>
+      <td>${ev.attack_type ?? "-"}</td>
+      <td class="mono">${ev.score ?? 0}</td>
+      <td class="mono">${ev.confidence ?? 0}</td>
+      <td class="mono">${pps}</td>
+      <td class="mono">${bps}</td>
+      <td class="mono">${uniqSrc}</td>
+      <td class="mono">${uniqFlow5}</td>
+      <td class="mono">${synRatio}</td>
+      <td class="mono">${synOnlyRatio}</td>
+      <td class="mono">${topSrc}</td>
+      <td class="mono">${topDport}</td>
+      <td style="max-width:420px; white-space:normal; word-break:break-word;">${reasons}</td>
+    `;
+
+    // newest on top
+    if (tbody.firstChild) tbody.insertBefore(tr, tbody.firstChild);
+    else tbody.appendChild(tr);
+
+    updateSummary(ev);
+  }
+
+  function rebuildTable(){
+    tbody.innerHTML = "";
+    rowCount = 0;
+
+    const maxRows = parseInt(maxRowsInput.value || "200", 10);
+    const filtered = store.filter(passesFilter).slice(-maxRows);
+    for (const ev of filtered){
+      appendRow(ev, false);
+    }
+  }
+
+  // ---------- Chart ----------
+  const canvas = document.getElementById("chart");
+  const ctx = canvas.getContext("2d");
+
+  function pushPoint(ev){
+    const ts = Number(ev.ts || 0);
+    const pps = Number(safeGet(ev, "features.pps", 0)) || 0;
+    const bps = Number(safeGet(ev, "features.bps", 0)) || 0;
+    const cls = classify(ev);
+    points.push({ ts, pps, bps, cls });
+
+    // Trim by chart window seconds
+    const winSec = parseInt(chartWindowInput.value || "60", 10);
+    const cutoff = ts - winSec;
+    points = points.filter(p => p.ts >= cutoff);
+  }
+
+  function drawChart(){
+    const w = canvas.width, h = canvas.height;
+    ctx.clearRect(0,0,w,h);
+
+    // background
+    ctx.fillStyle = "rgba(17,31,61,0.15)";
+    ctx.fillRect(0,0,w,h);
+
+    // grid
+    ctx.strokeStyle = "rgba(255,255,255,0.08)";
+    ctx.lineWidth = 1;
+    const gridN = 6;
+    for (let i=1;i<gridN;i++){
+      const y = (h/gridN)*i;
+      ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(w,y); ctx.stroke();
+    }
+    for (let i=1;i<gridN;i++){
+      const x = (w/gridN)*i;
+      ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,h); ctx.stroke();
+    }
+
+    if (points.length < 2) return;
+
+    const minTs = points[0].ts;
+    const maxTs = points[points.length-1].ts;
+
+    // scale Y by max of pps and bps (scaled)
+    const maxP = Math.max(...points.map(p=>p.pps), 1);
+    const maxB = Math.max(...points.map(p=>p.bps), 1);
+    // bps 太大，缩放到和 pps 同一图层（除以 1000）
+    const bpsScale = 1000;
+    const maxY = Math.max(maxP, Math.floor(maxB / bpsScale), 1);
+
+    function xOf(ts){ return ((ts - minTs) / Math.max((maxTs-minTs), 1e-6)) * (w-20) + 10; }
+    function yOf(v){ return h - (v / maxY) * (h-20) - 10; }
+
+    // Draw PPS line
+    ctx.strokeStyle = "rgba(46,204,113,0.9)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    points.forEach((p, i)=>{
+      const x = xOf(p.ts);
+      const y = yOf(p.pps);
+      if (i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+    });
+    ctx.stroke();
+
+    // Draw BPS line (bps/1000)
+    ctx.strokeStyle = "rgba(52,152,219,0.9)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    points.forEach((p, i)=>{
+      const x = xOf(p.ts);
+      const y = yOf(p.bps / bpsScale);
+      if (i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+    });
+    ctx.stroke();
+
+    // Mark alert points
+    points.forEach(p=>{
+      if (p.cls === "suspect" || p.cls === "attack"){
+        const x = xOf(p.ts);
+        const y = yOf(p.pps);
+        ctx.fillStyle = (p.cls==="attack") ? "rgba(231,76,60,0.95)" : "rgba(243,156,18,0.95)";
+        ctx.beginPath(); ctx.arc(x,y,4,0,Math.PI*2); ctx.fill();
+      }
+    });
+
+    // legend
+    ctx.fillStyle = "rgba(232,238,252,0.9)";
+    ctx.font = "14px ui-sans-serif, system-ui";
+    ctx.fillText("PPS", 14, 20);
+    ctx.fillStyle = "rgba(46,204,113,0.9)";
+    ctx.fillRect(52, 11, 18, 10);
+
+    ctx.fillStyle = "rgba(232,238,252,0.9)";
+    ctx.fillText("BPS/1000", 80, 20);
+    ctx.fillStyle = "rgba(52,152,219,0.9)";
+    ctx.fillRect(156, 11, 18, 10);
+  }
+
+  function tickChart(){
+    drawChart();
+    requestAnimationFrame(tickChart);
+  }
+
+  // ---------- API ----------
+  async function loadRecent(){
+    try{
+      const limit = parseInt(maxRowsInput.value || "200", 10);
+      const resp = await fetch(`/api/events?limit=${limit}`);
+      const data = await resp.json();
+      if (Array.isArray(data)){
+        store = data;
+
+        // reset stats for this page session
+        rowCount = 0;
+        cBenign = cSuspect = cAttack = 0;
+        maxPps = maxBps = 0;
+        cntBenign.textContent = "0";
+        cntSuspect.textContent = "0";
+        cntAttack.textContent = "0";
+        maxPpsEl.textContent = "0";
+        maxBpsEl.textContent = "0";
+        points = [];
+
+        // rebuild
+        rebuildTable();
+
+        // feed chart points + summary from history
+        for (const ev of data){
+          pushPoint(ev);
+          // update stats based on history
+          const cls = classify(ev);
+          if (cls === "benign") cBenign++;
+          if (cls === "suspect") cSuspect++;
+          if (cls === "attack") cAttack++;
+          const pps = Number(safeGet(ev, "features.pps", 0)) || 0;
+          const bps = Number(safeGet(ev, "features.bps", 0)) || 0;
+          if (pps > maxPps) maxPps = pps;
+          if (bps > maxBps) maxBps = bps;
+        }
+        cntBenign.textContent = cBenign;
+        cntSuspect.textContent = cSuspect;
+        cntAttack.textContent = cAttack;
+        maxPpsEl.textContent = maxPps;
+        maxBpsEl.textContent = maxBps;
+
+        if (data.length > 0) updateSummary(data[data.length-1]);
+      }
+    }catch(e){
+      statusBadge.className = "badge bad";
+      statusText.textContent = "加载失败";
+    }
+  }
+
+  function setStatus(mode, text){
+    statusBadge.classList.remove("ok","warn","bad");
+    statusBadge.classList.add(mode);
+    statusText.textContent = text;
+  }
+
+  function startStream(){
+    if (es) es.close();
+    es = new EventSource("/api/stream");
+
+    es.onopen = ()=> setStatus("ok", "实时已连接");
+    es.onerror = ()=> setStatus("bad", "连接断开(自动重连)");
+
+    es.onmessage = (msg)=>{
+      if (paused) return;
+      const line = msg.data;
+      if (!line) return;
+      try{
+        const ev = JSON.parse(line);
+        store.push(ev);
+
+        // store trim
+        const maxRows = parseInt(maxRowsInput.value || "200", 10);
+        if (store.length > maxRows * 10) store = store.slice(-maxRows * 6);
+
+        pushPoint(ev);
+        appendRow(ev, false); // already pushed
+      }catch(e){
+        // ignore
+      }
+    };
+  }
+
+  // ---------- Buttons ----------
+  document.getElementById("btnLoad").addEventListener("click", loadRecent);
+  document.getElementById("btnClear").addEventListener("click", ()=>{
+    tbody.innerHTML = "";
+    rowCount = 0;
+    store = [];
+    points = [];
+    cBenign = cSuspect = cAttack = 0;
+    maxPps = maxBps = 0;
+    cntBenign.textContent = "0";
+    cntSuspect.textContent = "0";
+    cntAttack.textContent = "0";
+    maxPpsEl.textContent = "0";
+    maxBpsEl.textContent = "0";
+    lastAlertLabel.textContent = "暂无";
+    lastAlertMeta.textContent = "-";
+    lastAlertReasons.textContent = "-";
+    lastAlertTop.textContent = "-";
+  });
+
+  document.getElementById("btnPause").addEventListener("click", (e)=>{
+    paused = !paused;
+    e.target.textContent = paused ? "继续" : "暂停";
+    setStatus(paused ? "warn" : "ok", paused ? "已暂停（仍保持连接）" : "实时已连接");
+  });
+
+  filterMode.addEventListener("change", rebuildTable);
+  maxRowsInput.addEventListener("change", rebuildTable);
+  chartWindowInput.addEventListener("change", ()=>{
+    // trim points quickly based on latest ts
+    if (points.length){
+      const winSec = parseInt(chartWindowInput.value || "60", 10);
+      const latest = points[points.length-1].ts;
+      const cutoff = latest - winSec;
+      points = points.filter(p => p.ts >= cutoff);
+    }
+  });
+
+  // ---------- Init ----------
+  setStatus("warn", "连接中...");
+  loadRecent().finally(()=>{
+    startStream();
+    tickChart();
+  });
+</script>
+</body>
+</html>
