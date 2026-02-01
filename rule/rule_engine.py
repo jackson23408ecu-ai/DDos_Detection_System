@@ -20,7 +20,9 @@ def classify(features: dict, rules: dict) -> tuple[str, str, int, float, list[st
     """
     th = rules.get("thresholds", {})
     w  = rules.get("weights", {})
-    suspect_score = rules.get("decision", {}).get("suspect_score", 4)
+    decision = rules.get("decision", {}) or {}
+    suspect_score = decision.get("suspect_score", 4)
+    attack_score = decision.get("attack_score", suspect_score + 2)
 
     score = 0
     reasons = []
@@ -46,7 +48,12 @@ def classify(features: dict, rules: dict) -> tuple[str, str, int, float, list[st
     hit("syn_ratio_high", syn_ratio > safe_float(th.get("syn_ratio_high")), f"syn_ratio={syn_ratio}")
     hit("syn_only_ratio_high", syn_only_ratio > safe_float(th.get("syn_only_ratio_high")), f"syn_only_ratio={syn_only_ratio}")
 
-    label = "suspect" if score >= suspect_score else "benign"
+    if score >= attack_score:
+        label = "attack"
+    elif score >= suspect_score:
+        label = "suspect"
+    else:
+        label = "benign"
 
     # 置信度：先做个简单归一化，后续你接深度学习再替换
     max_possible = sum(int(v) for v in w.values()) if w else 1
@@ -55,11 +62,11 @@ def classify(features: dict, rules: dict) -> tuple[str, str, int, float, list[st
     # attack_type：先做最常见模板（你后续可以继续扩展更细）
     proto_cnt = features.get("proto_cnt", {}) or {}
     tcp_cnt = int(features.get("tcp_cnt", 0) or 0)
-    udp_cnt = int(proto_cnt.get("17", 0) or 0)
-    icmp_cnt = int(proto_cnt.get("1", 0) or 0)
+    udp_cnt = int(proto_cnt.get("17", proto_cnt.get(17, 0)) or 0)
+    icmp_cnt = int(proto_cnt.get("1", proto_cnt.get(1, 0)) or 0)
 
     attack_type = "BENIGN"
-    if label != "benign":
+    if label == "attack":
         # SYN Flood：syn_ratio 和 syn_only_ratio 高
         if syn_ratio > 0.5 and syn_only_ratio > 0.3 and tcp_cnt > 0:
             attack_type = "TCP_SYN_FLOOD"
@@ -71,6 +78,8 @@ def classify(features: dict, rules: dict) -> tuple[str, str, int, float, list[st
             attack_type = "ICMP_FLOOD"
         else:
             attack_type = "SUSPECT"
+    elif label == "suspect":
+        attack_type = "SUSPECT"
 
     return label, attack_type, score, confidence, reasons
 

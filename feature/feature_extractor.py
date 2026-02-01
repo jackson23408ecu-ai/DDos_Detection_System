@@ -184,7 +184,7 @@ class FlowWindowAgg:
             "dport_entropy": round(dport_entropy, 6),
 
             # 协议分布
-            "proto_cnt": dict(self.proto_cnt),   # 如 {6:xxx, 17:xxx, 1:xxx}
+            "proto_cnt": {str(k): v for k, v in self.proto_cnt.items()},   # 如 {"6":xxx, "17":xxx, "1":xxx}
 
             # 包长统计
             "pktlen_mean": round(pktlen_mean, 6),

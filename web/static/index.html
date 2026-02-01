@@ -4,42 +4,59 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>DDoS Detection Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
   <style>
+    @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&family=JetBrains+Mono:wght@400;600&display=swap');
+
     :root{
-      --bg:#0b1220;
-      --panel:#0f1b33;
-      --card:#111f3d;
+      --bg:#0b0f14;
+      --panel:#121824;
+      --card:#151e2e;
       --muted:#9aa7c7;
       --text:#e8eefc;
-      --line:#23365f;
-      --ok:#2ecc71;
-      --warn:#f39c12;
-      --bad:#e74c3c;
-      --chip:#162a52;
-      --tablebg:#0d1730;
-      --thead:#0f2246;
+      --line:#2a3550;
+      --ok:#29d17e;
+      --warn:#ffb347;
+      --bad:#ff5b5b;
+      --chip:#1a253a;
+      --thead:#13213f;
+      --accent:#8ef0ff;
+      --accent2:#ffd166;
     }
     *{ box-sizing:border-box; }
     body{
       margin:0;
-      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
-      background: linear-gradient(180deg, var(--bg), #070c16);
+      font-family: "Space Grotesk", ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+      background: radial-gradient(1200px 600px at 12% -5%, rgba(142,240,255,0.18), transparent 60%),
+                  radial-gradient(900px 500px at 88% 10%, rgba(255,209,102,0.14), transparent 60%),
+                  linear-gradient(180deg, #0a0f18, #070b12 70%);
       color:var(--text);
+      min-height: 100vh;
+    }
+    body::before{
+      content:"";
+      position: fixed;
+      inset: 0;
+      background-image: linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
+                        linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px);
+      background-size: 26px 26px;
+      opacity: 0.35;
+      pointer-events:none;
     }
     header{
-      padding:16px 18px;
+      padding:18px 20px;
       border-bottom: 1px solid rgba(255,255,255,0.06);
-      background: rgba(15,27,51,0.55);
-      backdrop-filter: blur(8px);
-      position: sticky; top:0; z-index: 5;
+      background: rgba(12,18,30,0.7);
+      backdrop-filter: blur(10px);
+      position: sticky; top:0; z-index: 6;
     }
-    h1{ margin:0; font-size:18px; letter-spacing:.2px; }
+    h1{ margin:0; font-size:20px; letter-spacing:.3px; font-weight:700; }
     .sub{ margin-top:6px; font-size:12px; color:var(--muted); }
-    .wrap{ padding:16px 18px 22px; max-width: 1400px; margin:0 auto; }
+    .wrap{ padding:18px 20px 24px; max-width: 1420px; margin:0 auto; }
 
     .topbar{
       display:flex; gap:10px; align-items:center; flex-wrap:wrap;
-      margin: 14px 0 14px;
+      margin: 14px 0 16px;
     }
     .badge{
       padding:6px 10px;
@@ -49,10 +66,10 @@
       border:1px solid rgba(255,255,255,0.08);
       display:inline-flex; align-items:center; gap:8px;
     }
-    .dot{ width:8px; height:8px; border-radius:999px; background: var(--warn); display:inline-block;}
-    .badge.ok .dot{ background: var(--ok); }
+    .dot{ width:8px; height:8px; border-radius:999px; background: var(--warn); display:inline-block; box-shadow: 0 0 8px rgba(255,179,71,0.5);}
+    .badge.ok .dot{ background: var(--ok); box-shadow: 0 0 10px rgba(41,209,126,0.5); }
     .badge.warn .dot{ background: var(--warn); }
-    .badge.bad .dot{ background: var(--bad); }
+    .badge.bad .dot{ background: var(--bad); box-shadow: 0 0 10px rgba(255,91,91,0.5); }
 
     button{
       padding:9px 12px;
@@ -61,10 +78,11 @@
       border:1px solid rgba(255,255,255,0.10);
       border-radius:10px;
       cursor:pointer;
+      transition: transform .2s ease, background .2s ease;
     }
-    button:hover{ background: rgba(255,255,255,0.10); }
-    button.primary{ background: rgba(46,204,113,0.18); border-color: rgba(46,204,113,0.35); }
-    button.primary:hover{ background: rgba(46,204,113,0.26); }
+    button:hover{ background: rgba(255,255,255,0.12); transform: translateY(-1px); }
+    button.primary{ background: rgba(41,209,126,0.18); border-color: rgba(41,209,126,0.35); }
+    button.primary:hover{ background: rgba(41,209,126,0.28); }
 
     select,input{
       padding:9px 10px;
@@ -83,34 +101,55 @@
       margin-top: 10px;
     }
     .card{
-      background: rgba(17,31,61,0.85);
+      background: rgba(21,30,46,0.88);
       border:1px solid rgba(255,255,255,0.08);
-      border-radius:16px;
-      padding:12px 12px;
-      box-shadow: 0 12px 30px rgba(0,0,0,0.25);
+      border-radius:18px;
+      padding:14px 14px;
+      box-shadow: 0 18px 36px rgba(0,0,0,0.25);
+      animation: fadeUp .4s ease both;
     }
     .card .k{ font-size:12px; color: var(--muted); }
-    .card .v{ font-size:22px; font-weight: 750; margin-top: 6px; }
+    .card .v{ font-size:22px; font-weight: 700; margin-top: 6px; }
     .card .s{ font-size:12px; color: var(--muted); margin-top: 6px; line-height:1.35; }
     .chip{
       display:inline-flex; align-items:center; gap:8px;
       padding:6px 10px;
       border-radius:999px;
-      background: rgba(22,42,82,0.9);
+      background: rgba(26,37,58,0.9);
       border:1px solid rgba(255,255,255,0.08);
       font-size:12px;
       color: var(--text);
     }
+    .tag{
+      display:inline-flex;
+      align-items:center;
+      gap:6px;
+      padding:2px 8px;
+      border-radius:999px;
+      font-size:11px;
+      border:1px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.04);
+    }
+    .tag.attack{ color: var(--bad); border-color: rgba(255,91,91,0.4); background: rgba(255,91,91,0.08); }
+    .tag.suspect{ color: var(--warn); border-color: rgba(255,179,71,0.4); background: rgba(255,179,71,0.08); }
+    .tag.benign{ color: var(--ok); border-color: rgba(41,209,126,0.4); background: rgba(41,209,126,0.08); }
+    .miniBtn{
+      padding:4px 8px;
+      border-radius:8px;
+      font-size:11px;
+      margin-right:6px;
+    }
+    .miniBtn.fp{ border-color: rgba(255,91,91,0.5); color: var(--bad); }
+    .miniBtn.fn{ border-color: rgba(255,179,71,0.5); color: var(--warn); }
 
-    .chartWrap{ padding: 10px; }
-    canvas{ width:100%; height: 210px; display:block; }
+    .chart{ width:100%; height: 240px; }
 
-    .tableCard{ padding: 0; overflow:hidden; background: rgba(13,23,48,0.75); }
+    .tableCard{ padding: 0; overflow:hidden; background: rgba(15,23,38,0.8); }
     .tableTop{
       display:flex; justify-content:space-between; align-items:center;
       padding: 10px 12px;
       border-bottom: 1px solid rgba(255,255,255,0.06);
-      background: rgba(15,34,70,0.4);
+      background: rgba(19,33,63,0.5);
     }
     .tableTop .title{ font-weight:700; }
     .tableTop .hint{ font-size:12px; color: var(--muted); }
@@ -125,7 +164,7 @@
       position: sticky;
       top: 0;
       z-index: 2;
-      background: rgba(15,34,70,0.95);
+      background: rgba(19,33,63,0.95);
       color: var(--text);
       text-align:left;
       border-bottom: 1px solid rgba(255,255,255,0.08);
@@ -139,19 +178,24 @@
       white-space: nowrap;
     }
     tbody tr:hover{ background: rgba(255,255,255,0.04); }
-    tr.suspect{ background: rgba(243,156,18,0.10); }
-    tr.attack{ background: rgba(231,76,60,0.12); }
-    .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+    tr.suspect{ background: rgba(255,179,71,0.12); }
+    tr.attack{ background: rgba(255,91,91,0.14); }
+    .mono{ font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
 
     .foot{
       margin-top: 10px;
       font-size:12px;
       color: var(--muted);
     }
-    .right { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
 
-    @media (max-width: 900px){
+    @keyframes fadeUp{
+      from{ opacity:0; transform: translateY(8px); }
+      to{ opacity:1; transform: translateY(0); }
+    }
+
+    @media (max-width: 980px){
       .grid{ grid-template-columns: repeat(6, minmax(0,1fr)); }
+      .chart{ height: 200px; }
     }
   </style>
 </head>
@@ -159,36 +203,42 @@
 <body>
 <header>
   <h1>DDoS Detection Dashboard</h1>
-  <div class="sub">实时来源 <span class="mono">/api/stream</span> · 历史来源 <span class="mono">/api/events</span></div>
+  <div class="sub">数据来源 <span class="mono">SQLite</span> · API: <span class="mono">/api/events_db /api/series /api/topk</span></div>
 </header>
 
 <div class="wrap">
   <div class="topbar">
     <span id="statusBadge" class="badge warn"><span class="dot"></span><span id="statusText">连接中...</span></span>
 
-    <button id="btnLoad" class="primary">加载最近事件</button>
-    <button id="btnPause">暂停</button>
-    <button id="btnClear">清空</button>
+    <button id="btnLoad" class="primary">刷新</button>
+    <button id="btnAuto">自动刷新: ON</button>
 
-    <label>过滤
-      <select id="filterMode">
-        <option value="ALL">全部</option>
-        <option value="ALERTS">只看告警(suspect+attack)</option>
-        <option value="attack">attack</option>
-        <option value="suspect">suspect</option>
+    <label>label
+      <select id="labelFilter">
+        <option value="">全部</option>
         <option value="benign">benign</option>
+        <option value="suspect">suspect</option>
+        <option value="attack">attack</option>
       </select>
+    </label>
+
+    <label>attack_type
+      <input id="attackTypeFilter" type="text" placeholder="SUSPECT/UDP_FLOOD" style="width:180px;">
     </label>
 
     <label>显示条数
       <input id="maxRows" type="number" value="200" min="20" max="2000" style="width:110px;">
     </label>
 
-    <label>图表窗口(秒)
-      <input id="chartWindow" type="number" value="60" min="10" max="600" style="width:110px;">
+    <label>窗口(分钟)
+      <input id="minutes" type="number" value="60" min="1" max="720" style="width:110px;">
     </label>
 
-    <span class="chip">提示：切到“只看告警”更直观</span>
+    <label>聚合桶(秒)
+      <input id="bucketSec" type="number" value="5" min="1" max="120" style="width:110px;">
+    </label>
+
+    <span class="chip">提示：过滤 attack / suspect 更直观</span>
   </div>
 
   <div class="grid">
@@ -212,7 +262,7 @@
     </div>
 
     <div class="card" style="grid-column: span 3;">
-      <div class="k">统计(本页会话)</div>
+      <div class="k">统计(当前结果集)</div>
       <div class="v">
         <span style="color:var(--ok)">benign <span id="cntBenign">0</span></span>
         · <span style="color:var(--warn)">suspect <span id="cntSuspect">0</span></span>
@@ -221,26 +271,70 @@
       <div class="s">最高 PPS: <span id="maxPps">0</span> · 最高 BPS: <span id="maxBps">0</span></div>
     </div>
 
-    <div class="card chartWrap" style="grid-column: span 8;">
-      <div class="k">最近窗口趋势（PPS / BPS）</div>
-      <canvas id="chart" width="1200" height="420"></canvas>
-      <div class="s">说明：图表按“每条事件”的时间序列绘制，窗口长度由上方“图表窗口(秒)”控制。</div>
+    <div class="card" style="grid-column: span 3;">
+      <div class="k">数据库状态</div>
+      <div class="v"><span id="dbEvents">0</span> / <span id="dbAlerts">0</span></div>
+      <div class="s">events / alerts</div>
+      <div class="s">last: <span id="dbLastTs">-</span></div>
+    </div>
+
+    <div class="card" style="grid-column: span 3;">
+      <div class="k">融合阈值控制</div>
+      <div class="s">suspect_score <input id="suspectScore" type="number" step="1" style="width:80px;"></div>
+      <div class="s">attack_score <input id="attackScore" type="number" step="1" style="width:80px;"></div>
+      <div class="s">dl_suspect_score <input id="dlSuspectScore" type="number" step="0.01" style="width:80px;"></div>
+      <div class="s">dl_attack_score <input id="dlAttackScore" type="number" step="0.01" style="width:80px;"></div>
+      <div style="margin-top:6px;">
+        <button id="btnSaveRules" class="miniBtn">保存规则</button>
+      </div>
+    </div>
+
+    <div class="card" style="grid-column: span 3;">
+      <div class="k">误报/漏报标注</div>
+      <div class="v">FP <span id="cntFP">0</span> · FN <span id="cntFN">0</span></div>
+      <div class="s">TP <span id="cntTP">0</span> · TN <span id="cntTN">0</span></div>
+      <div class="s">窗口统计（最近 60 分钟）</div>
+    </div>
+
+    <div class="card" style="grid-column: span 8;">
+      <div class="k">PPS / BPS 趋势</div>
+      <div id="chartPpsBps" class="chart"></div>
     </div>
 
     <div class="card" style="grid-column: span 4;">
-      <div class="k">最近一次告警（suspect / attack）</div>
-      <div class="v" id="lastAlertLabel">暂无</div>
-      <div class="s" id="lastAlertMeta">-</div>
-      <div class="s" id="lastAlertReasons">-</div>
-      <div class="s" id="lastAlertTop">-</div>
+      <div class="k">Score / Confidence 趋势</div>
+      <div id="chartScore" class="chart"></div>
+    </div>
+
+    <div class="card" style="grid-column: span 4;">
+      <div class="k">DL p_attack 趋势</div>
+      <div id="chartMlScore" class="chart"></div>
+    </div>
+
+    <div class="card" style="grid-column: span 4;">
+      <div class="k">决策来源分布</div>
+      <div id="chartMlAgree" class="chart"></div>
+    </div>
+
+    <div class="card" style="grid-column: span 4;">
+      <div class="k">攻击类型占比</div>
+      <div id="chartAttackPie" class="chart"></div>
+    </div>
+
+    <div class="card" style="grid-column: span 4;">
+      <div class="k">Top Src IP</div>
+      <div id="chartTopSrc" class="chart"></div>
+    </div>
+
+    <div class="card" style="grid-column: span 4;">
+      <div class="k">Top Dport</div>
+      <div id="chartTopDport" class="chart"></div>
     </div>
 
     <div class="card tableCard" style="grid-column: span 12;">
       <div class="tableTop">
-        <div class="title">实时事件表</div>
-        <div class="right">
-          <span class="hint">最新在最上面 · suspect/attack 自动高亮</span>
-        </div>
+        <div class="title">历史事件表（SQLite）</div>
+        <div class="hint">最新在最上面 · 可按 label/attack_type 过滤</div>
       </div>
       <div style="overflow:auto; max-height: 520px;">
         <table>
@@ -248,8 +342,10 @@
             <tr>
               <th>#</th>
               <th>时间</th>
-              <th>label</th>
-              <th>attack_type</th>
+              <th>final_label</th>
+              <th>final_attack_type</th>
+              <th>decision_source</th>
+              <th>dl_p_attack</th>
               <th>score</th>
               <th>conf</th>
               <th>pps</th>
@@ -261,6 +357,7 @@
               <th>top_src_ip</th>
               <th>top_dport</th>
               <th>reasons</th>
+              <th>feedback</th>
             </tr>
           </thead>
           <tbody id="tbody"></tbody>
@@ -270,19 +367,20 @@
   </div>
 
   <div class="foot">
-    如果页面没数据：确认规则引擎写入 <span class="mono">logs/events.jsonl</span>，并从项目根目录启动 Flask：<span class="mono">python3 web/app.py</span>
+    启动建议：先运行规则引擎写入 jsonl，再启动 ingest_sqlite.py，同步写入 SQLite。
   </div>
 </div>
 
 <script>
-  // ---------- DOM ----------
   const statusBadge = document.getElementById("statusBadge");
   const statusText  = document.getElementById("statusText");
-
   const tbody = document.getElementById("tbody");
-  const filterMode = document.getElementById("filterMode");
+
+  const labelFilter = document.getElementById("labelFilter");
+  const attackTypeFilter = document.getElementById("attackTypeFilter");
   const maxRowsInput = document.getElementById("maxRows");
-  const chartWindowInput = document.getElementById("chartWindow");
+  const minutesInput = document.getElementById("minutes");
+  const bucketSecInput = document.getElementById("bucketSec");
 
   const lastLabel = document.getElementById("lastLabel");
   const lastAttackType = document.getElementById("lastAttackType");
@@ -299,25 +397,29 @@
   const cntAttack = document.getElementById("cntAttack");
   const maxPpsEl = document.getElementById("maxPps");
   const maxBpsEl = document.getElementById("maxBps");
+  const dbEvents = document.getElementById("dbEvents");
+  const dbAlerts = document.getElementById("dbAlerts");
+  const dbLastTs = document.getElementById("dbLastTs");
+  const suspectScore = document.getElementById("suspectScore");
+  const attackScore = document.getElementById("attackScore");
+  const dlSuspectScore = document.getElementById("dlSuspectScore");
+  const dlAttackScore = document.getElementById("dlAttackScore");
+  const cntFP = document.getElementById("cntFP");
+  const cntFN = document.getElementById("cntFN");
+  const cntTP = document.getElementById("cntTP");
+  const cntTN = document.getElementById("cntTN");
 
-  const lastAlertLabel = document.getElementById("lastAlertLabel");
-  const lastAlertMeta = document.getElementById("lastAlertMeta");
-  const lastAlertReasons = document.getElementById("lastAlertReasons");
-  const lastAlertTop = document.getElementById("lastAlertTop");
+  let auto = true;
+  let timer = null;
 
-  // ---------- State ----------
-  let rowCount = 0;
-  let store = [];           // all received events
-  let paused = false;
-  let es = null;
+  const chartPpsBps = echarts.init(document.getElementById("chartPpsBps"));
+  const chartScore = echarts.init(document.getElementById("chartScore"));
+  const chartMlScore = echarts.init(document.getElementById("chartMlScore"));
+  const chartMlAgree = echarts.init(document.getElementById("chartMlAgree"));
+  const chartAttackPie = echarts.init(document.getElementById("chartAttackPie"));
+  const chartTopSrc = echarts.init(document.getElementById("chartTopSrc"));
+  const chartTopDport = echarts.init(document.getElementById("chartTopDport"));
 
-  let cBenign = 0, cSuspect = 0, cAttack = 0;
-  let maxPps = 0, maxBps = 0;
-
-  // Chart points: [{ts, pps, bps, labelClass}]
-  let points = [];
-
-  // ---------- Helpers ----------
   function fmtTime(ts){
     if (!ts) return "-";
     const d = new Date(ts * 1000);
@@ -332,23 +434,126 @@
     return arr.slice(0, n).map(x => `${x[0]}(${x[1]})`).join(", ");
   }
   function classify(ev){
-    const label = (ev.label || "").toLowerCase();
-    const at = (ev.attack_type || "").toUpperCase();
-    if (label === "attack" || (at && at !== "BENIGN" && at !== "UNKNOWN")) return "attack";
+    const label = (ev.final_label ?? ev.label ?? "").toLowerCase();
+    if (label === "attack") return "attack";
     if (label === "suspect") return "suspect";
     return "benign";
   }
-  function passesFilter(ev){
-    const f = filterMode.value;
-    const cls = classify(ev);
-    if (f === "ALL") return true;
-    if (f === "ALERTS") return (cls === "suspect" || cls === "attack");
-    return cls === f;
+
+  function setStatus(mode, text){
+    statusBadge.classList.remove("ok","warn","bad");
+    statusBadge.classList.add(mode);
+    statusText.textContent = text;
   }
 
-  function updateSummary(ev){
-    lastLabel.textContent = ev.label ?? "-";
-    lastAttackType.textContent = `attack_type: ${ev.attack_type ?? "-"}`;
+  async function loadEvents(){
+    const limit = parseInt(maxRowsInput.value || "200", 10);
+    const label = labelFilter.value.trim();
+    const attackType = attackTypeFilter.value.trim();
+
+    const params = new URLSearchParams({ limit: String(limit), offset: "0" });
+    if (label) params.append("label", label);
+    if (attackType) params.append("attack_type", attackType);
+
+    const resp = await fetch(`/api/events_db?${params.toString()}`);
+    if (!resp.ok) throw new Error("events_db failed");
+    return resp.json();
+  }
+
+  async function loadSeries(){
+    const minutes = parseInt(minutesInput.value || "60", 10);
+    const bucketSec = parseInt(bucketSecInput.value || "5", 10);
+    const resp = await fetch(`/api/series?minutes=${minutes}&bucket_sec=${bucketSec}`);
+    if (!resp.ok) throw new Error("series failed");
+    return resp.json();
+  }
+
+  async function loadTopk(){
+    const minutes = parseInt(minutesInput.value || "60", 10);
+    const resp = await fetch(`/api/topk?minutes=${minutes}&topn=8`);
+    if (!resp.ok) throw new Error("topk failed");
+    return resp.json();
+  }
+
+  async function loadRules(){
+    const resp = await fetch(`/api/rules`);
+    if (!resp.ok) throw new Error("rules failed");
+    return resp.json();
+  }
+
+  async function saveRules(){
+    const payload = {
+      decision: {
+        suspect_score: parseFloat(suspectScore.value || "4"),
+        attack_score: parseFloat(attackScore.value || "8"),
+        dl_suspect_score: parseFloat(dlSuspectScore.value || "0.5"),
+        dl_attack_score: parseFloat(dlAttackScore.value || "0.7"),
+      }
+    };
+    const resp = await fetch(`/api/rules`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (!resp.ok) throw new Error("save rules failed");
+    return resp.json();
+  }
+
+  async function loadFeedbackStats(){
+    const resp = await fetch(`/api/feedback_stats?minutes=60`);
+    if (!resp.ok) throw new Error("feedback stats failed");
+    return resp.json();
+  }
+
+  async function sendFeedback(eventId, kind){
+    const resp = await fetch(`/api/feedback`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ event_id: eventId, kind })
+    });
+    if (!resp.ok) throw new Error("feedback failed");
+    return resp.json();
+  }
+  async function loadMlSeries(){
+    const minutes = parseInt(minutesInput.value || "60", 10);
+    const bucketSec = parseInt(bucketSecInput.value || "5", 10);
+    const resp = await fetch(`/api/ml_series?minutes=${minutes}&bucket_sec=${bucketSec}`);
+    if (!resp.ok) throw new Error("ml_series failed");
+    return resp.json();
+  }
+
+  async function loadMlAgree(){
+    const minutes = parseInt(minutesInput.value || "60", 10);
+    const resp = await fetch(`/api/ml_agree?minutes=${minutes}`);
+    if (!resp.ok) throw new Error("ml_agree failed");
+    return resp.json();
+  }
+
+  async function loadDbStatus(){
+    const resp = await fetch(`/api/db_status`);
+    if (!resp.ok) throw new Error("db_status failed");
+    return resp.json();
+  }
+
+  function updateSummary(events){
+    if (!events.length){
+      lastLabel.textContent = "-";
+      lastAttackType.textContent = "attack_type: -";
+      lastTs.textContent = "ts: -";
+      lastScore.textContent = "-";
+      lastConf.textContent = "-";
+      lastReasons.textContent = "reasons: -";
+      lastPps.textContent = "-";
+      lastBps.textContent = "-";
+      lastFlow.textContent = "uniq_src / uniq_flow5: - / -";
+      return;
+    }
+    const ev = events[0];
+    const finalLabel = ev.final_label ?? ev.label ?? "-";
+    const finalAttack = ev.final_attack_type ?? ev.attack_type ?? "-";
+    const source = ev.decision_source ?? "rules";
+    lastLabel.textContent = `${finalLabel} (${source})`;
+    lastAttackType.textContent = `attack_type: ${finalAttack}`;
     lastTs.textContent = `ts: ${fmtTime(ev.ts)}`;
 
     lastScore.textContent = `${ev.score ?? 0}`;
@@ -361,330 +566,257 @@
     const bps = Number(safeGet(ev, "features.bps", 0)) || 0;
     lastPps.textContent = `${pps}`;
     lastBps.textContent = `${bps}`;
-
     lastFlow.textContent = `uniq_src / uniq_flow5: ${safeGet(ev,"features.uniq_src",0)} / ${safeGet(ev,"features.uniq_flow5",0)}`;
+  }
 
-    // update stats
-    const cls = classify(ev);
-    if (cls === "benign") cBenign++;
-    if (cls === "suspect") cSuspect++;
-    if (cls === "attack") cAttack++;
-    cntBenign.textContent = cBenign;
-    cntSuspect.textContent = cSuspect;
-    cntAttack.textContent = cAttack;
-
-    if (pps > maxPps) maxPps = pps;
-    if (bps > maxBps) maxBps = bps;
+  function updateStats(events){
+    let cB = 0, cS = 0, cA = 0;
+    let maxPps = 0, maxBps = 0;
+    for (const ev of events){
+      const cls = classify(ev);
+      if (cls === "benign") cB++;
+      if (cls === "suspect") cS++;
+      if (cls === "attack") cA++;
+      const pps = Number(safeGet(ev, "features.pps", 0)) || 0;
+      const bps = Number(safeGet(ev, "features.bps", 0)) || 0;
+      if (pps > maxPps) maxPps = pps;
+      if (bps > maxBps) maxBps = bps;
+    }
+    cntBenign.textContent = cB;
+    cntSuspect.textContent = cS;
+    cntAttack.textContent = cA;
     maxPpsEl.textContent = maxPps;
     maxBpsEl.textContent = maxBps;
+  }
 
-    // update last alert card
-    if (cls === "suspect" || cls === "attack"){
-      lastAlertLabel.textContent = `${cls.toUpperCase()} · score=${ev.score ?? 0}`;
-      lastAlertMeta.textContent = `时间: ${fmtTime(ev.ts)} · PPS=${pps} · BPS=${bps}`;
+  function renderTable(events){
+    tbody.innerHTML = "";
+    let idx = 0;
+    for (const ev of events){
+      idx += 1;
+      const tr = document.createElement("tr");
+      const cls = classify(ev);
+      if (cls === "suspect") tr.classList.add("suspect");
+      if (cls === "attack") tr.classList.add("attack");
+
+      const pps = safeGet(ev,"features.pps",0);
+      const bps = safeGet(ev,"features.bps",0);
+      const uniqSrc = safeGet(ev,"features.uniq_src",0);
+      const uniqFlow5 = safeGet(ev,"features.uniq_flow5",0);
+      const synRatio = safeGet(ev,"features.syn_ratio",0);
+      const synOnlyRatio = safeGet(ev,"features.syn_only_ratio",0);
+      const topSrc = formatTopList(safeGet(ev,"features.top_src_ip",[]), 2);
+      const topDport = formatTopList(safeGet(ev,"features.top_dport",[]), 2);
       const reasons = Array.isArray(ev.reasons) ? ev.reasons.join("; ") : "-";
-      lastAlertReasons.textContent = `原因: ${reasons}`;
-      const topSrc = formatTopList(safeGet(ev, "features.top_src_ip", []), 3);
-      const topDp  = formatTopList(safeGet(ev, "features.top_dport", []), 3);
-      lastAlertTop.textContent = `Top Src: ${topSrc} | Top Dport: ${topDp}`;
+      const finalLabel = ev.final_label ?? ev.label ?? "-";
+      const finalAttack = ev.final_attack_type ?? ev.attack_type ?? "-";
+      const decisionSource = ev.decision_source ?? "rules";
+      const dlP = (ev.dl_p_attack !== null && ev.dl_p_attack !== undefined) ? Number(ev.dl_p_attack).toFixed(6) : "-";
+
+      tr.innerHTML = `
+        <td class="mono">${idx}</td>
+        <td>${fmtTime(ev.ts)}</td>
+        <td><span class="tag ${cls}">${finalLabel}</span></td>
+        <td><span class="tag ${cls}">${finalAttack}</span></td>
+        <td class="mono">${decisionSource}</td>
+        <td class="mono">${dlP}</td>
+        <td class="mono">${ev.score ?? 0}</td>
+        <td class="mono">${ev.confidence ?? 0}</td>
+        <td class="mono">${pps}</td>
+        <td class="mono">${bps}</td>
+        <td class="mono">${uniqSrc}</td>
+        <td class="mono">${uniqFlow5}</td>
+        <td class="mono">${synRatio}</td>
+        <td class="mono">${synOnlyRatio}</td>
+        <td class="mono">${topSrc}</td>
+        <td class="mono">${topDport}</td>
+        <td style="max-width:420px; white-space:normal; word-break:break-word;">${reasons}</td>
+        <td>
+          <button class="miniBtn fp" data-id="${ev.id}" data-kind="fp">FP</button>
+          <button class="miniBtn fn" data-id="${ev.id}" data-kind="fn">FN</button>
+        </td>
+      `;
+      tbody.appendChild(tr);
     }
-  }
-
-  // ---------- Table ----------
-  function appendRow(ev, pushStore=true){
-    if (pushStore) store.push(ev);
-
-    if (!passesFilter(ev)) return;
-
-    const maxRows = parseInt(maxRowsInput.value || "200", 10);
-    const displayed = tbody.querySelectorAll("tr").length;
-    if (displayed >= maxRows){
-      rebuildTable();
-      return;
-    }
-
-    rowCount += 1;
-    const tr = document.createElement("tr");
-    const cls = classify(ev);
-    if (cls === "suspect") tr.classList.add("suspect");
-    if (cls === "attack") tr.classList.add("attack");
-
-    const pps = safeGet(ev,"features.pps",0);
-    const bps = safeGet(ev,"features.bps",0);
-    const uniqSrc = safeGet(ev,"features.uniq_src",0);
-    const uniqFlow5 = safeGet(ev,"features.uniq_flow5",0);
-    const synRatio = safeGet(ev,"features.syn_ratio",0);
-    const synOnlyRatio = safeGet(ev,"features.syn_only_ratio",0);
-    const topSrc = formatTopList(safeGet(ev,"features.top_src_ip",[]), 2);
-    const topDport = formatTopList(safeGet(ev,"features.top_dport",[]), 2);
-    const reasons = Array.isArray(ev.reasons) ? ev.reasons.join("; ") : "-";
-
-    tr.innerHTML = `
-      <td class="mono">${rowCount}</td>
-      <td>${fmtTime(ev.ts)}</td>
-      <td>${ev.label ?? "-"}</td>
-      <td>${ev.attack_type ?? "-"}</td>
-      <td class="mono">${ev.score ?? 0}</td>
-      <td class="mono">${ev.confidence ?? 0}</td>
-      <td class="mono">${pps}</td>
-      <td class="mono">${bps}</td>
-      <td class="mono">${uniqSrc}</td>
-      <td class="mono">${uniqFlow5}</td>
-      <td class="mono">${synRatio}</td>
-      <td class="mono">${synOnlyRatio}</td>
-      <td class="mono">${topSrc}</td>
-      <td class="mono">${topDport}</td>
-      <td style="max-width:420px; white-space:normal; word-break:break-word;">${reasons}</td>
-    `;
-
-    // newest on top
-    if (tbody.firstChild) tbody.insertBefore(tr, tbody.firstChild);
-    else tbody.appendChild(tr);
-
-    updateSummary(ev);
-  }
-
-  function rebuildTable(){
-    tbody.innerHTML = "";
-    rowCount = 0;
-
-    const maxRows = parseInt(maxRowsInput.value || "200", 10);
-    const filtered = store.filter(passesFilter).slice(-maxRows);
-    for (const ev of filtered){
-      appendRow(ev, false);
-    }
-  }
-
-  // ---------- Chart ----------
-  const canvas = document.getElementById("chart");
-  const ctx = canvas.getContext("2d");
-
-  function pushPoint(ev){
-    const ts = Number(ev.ts || 0);
-    const pps = Number(safeGet(ev, "features.pps", 0)) || 0;
-    const bps = Number(safeGet(ev, "features.bps", 0)) || 0;
-    const cls = classify(ev);
-    points.push({ ts, pps, bps, cls });
-
-    // Trim by chart window seconds
-    const winSec = parseInt(chartWindowInput.value || "60", 10);
-    const cutoff = ts - winSec;
-    points = points.filter(p => p.ts >= cutoff);
-  }
-
-  function drawChart(){
-    const w = canvas.width, h = canvas.height;
-    ctx.clearRect(0,0,w,h);
-
-    // background
-    ctx.fillStyle = "rgba(17,31,61,0.15)";
-    ctx.fillRect(0,0,w,h);
-
-    // grid
-    ctx.strokeStyle = "rgba(255,255,255,0.08)";
-    ctx.lineWidth = 1;
-    const gridN = 6;
-    for (let i=1;i<gridN;i++){
-      const y = (h/gridN)*i;
-      ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(w,y); ctx.stroke();
-    }
-    for (let i=1;i<gridN;i++){
-      const x = (w/gridN)*i;
-      ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,h); ctx.stroke();
-    }
-
-    if (points.length < 2) return;
-
-    const minTs = points[0].ts;
-    const maxTs = points[points.length-1].ts;
-
-    // scale Y by max of pps and bps (scaled)
-    const maxP = Math.max(...points.map(p=>p.pps), 1);
-    const maxB = Math.max(...points.map(p=>p.bps), 1);
-    // bps 太大，缩放到和 pps 同一图层（除以 1000）
-    const bpsScale = 1000;
-    const maxY = Math.max(maxP, Math.floor(maxB / bpsScale), 1);
-
-    function xOf(ts){ return ((ts - minTs) / Math.max((maxTs-minTs), 1e-6)) * (w-20) + 10; }
-    function yOf(v){ return h - (v / maxY) * (h-20) - 10; }
-
-    // Draw PPS line
-    ctx.strokeStyle = "rgba(46,204,113,0.9)";
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    points.forEach((p, i)=>{
-      const x = xOf(p.ts);
-      const y = yOf(p.pps);
-      if (i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
-    });
-    ctx.stroke();
-
-    // Draw BPS line (bps/1000)
-    ctx.strokeStyle = "rgba(52,152,219,0.9)";
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    points.forEach((p, i)=>{
-      const x = xOf(p.ts);
-      const y = yOf(p.bps / bpsScale);
-      if (i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
-    });
-    ctx.stroke();
-
-    // Mark alert points
-    points.forEach(p=>{
-      if (p.cls === "suspect" || p.cls === "attack"){
-        const x = xOf(p.ts);
-        const y = yOf(p.pps);
-        ctx.fillStyle = (p.cls==="attack") ? "rgba(231,76,60,0.95)" : "rgba(243,156,18,0.95)";
-        ctx.beginPath(); ctx.arc(x,y,4,0,Math.PI*2); ctx.fill();
-      }
-    });
-
-    // legend
-    ctx.fillStyle = "rgba(232,238,252,0.9)";
-    ctx.font = "14px ui-sans-serif, system-ui";
-    ctx.fillText("PPS", 14, 20);
-    ctx.fillStyle = "rgba(46,204,113,0.9)";
-    ctx.fillRect(52, 11, 18, 10);
-
-    ctx.fillStyle = "rgba(232,238,252,0.9)";
-    ctx.fillText("BPS/1000", 80, 20);
-    ctx.fillStyle = "rgba(52,152,219,0.9)";
-    ctx.fillRect(156, 11, 18, 10);
-  }
-
-  function tickChart(){
-    drawChart();
-    requestAnimationFrame(tickChart);
-  }
-
-  // ---------- API ----------
-  async function loadRecent(){
-    try{
-      const limit = parseInt(maxRowsInput.value || "200", 10);
-      const resp = await fetch(`/api/events?limit=${limit}`);
-      const data = await resp.json();
-      if (Array.isArray(data)){
-        store = data;
-
-        // reset stats for this page session
-        rowCount = 0;
-        cBenign = cSuspect = cAttack = 0;
-        maxPps = maxBps = 0;
-        cntBenign.textContent = "0";
-        cntSuspect.textContent = "0";
-        cntAttack.textContent = "0";
-        maxPpsEl.textContent = "0";
-        maxBpsEl.textContent = "0";
-        points = [];
-
-        // rebuild
-        rebuildTable();
-
-        // feed chart points + summary from history
-        for (const ev of data){
-          pushPoint(ev);
-          // update stats based on history
-          const cls = classify(ev);
-          if (cls === "benign") cBenign++;
-          if (cls === "suspect") cSuspect++;
-          if (cls === "attack") cAttack++;
-          const pps = Number(safeGet(ev, "features.pps", 0)) || 0;
-          const bps = Number(safeGet(ev, "features.bps", 0)) || 0;
-          if (pps > maxPps) maxPps = pps;
-          if (bps > maxBps) maxBps = bps;
+    tbody.querySelectorAll("button[data-id]").forEach(btn => {
+      btn.addEventListener("click", async (e)=>{
+        const id = parseInt(e.target.getAttribute("data-id") || "0", 10);
+        const kind = e.target.getAttribute("data-kind");
+        if (!id) return;
+        try{
+          await sendFeedback(id, kind);
+          const stats = await loadFeedbackStats();
+          cntFP.textContent = stats.fp || 0;
+          cntFN.textContent = stats.fn || 0;
+          cntTP.textContent = stats.tp || 0;
+          cntTN.textContent = stats.tn || 0;
+        }catch(err){
+          // ignore
         }
-        cntBenign.textContent = cBenign;
-        cntSuspect.textContent = cSuspect;
-        cntAttack.textContent = cAttack;
-        maxPpsEl.textContent = maxPps;
-        maxBpsEl.textContent = maxBps;
+      });
+    });
+  }
 
-        if (data.length > 0) updateSummary(data[data.length-1]);
+  function renderSeries(series){
+    const xs = series.map(s => new Date(s.ts * 1000).toLocaleTimeString());
+    const pps = series.map(s => s.pps);
+    const bps = series.map(s => s.bps);
+    const score = series.map(s => s.score);
+    const conf = series.map(s => s.confidence);
+
+    chartPpsBps.setOption({
+      tooltip: { trigger: "axis" },
+      legend: { textStyle: { color: "#cfe0ff" } },
+      grid: { left: 40, right: 10, top: 30, bottom: 30 },
+      xAxis: { type: "category", data: xs, axisLabel: { color: "#a9b7d6" } },
+      yAxis: { type: "value", axisLabel: { color: "#a9b7d6" } },
+      series: [
+        { name: "PPS", type: "line", data: pps, smooth: true, showSymbol: false, lineStyle: { color: "#29d17e" } },
+        { name: "BPS", type: "line", data: bps, smooth: true, showSymbol: false, lineStyle: { color: "#8ef0ff" } }
+      ]
+    });
+
+    chartScore.setOption({
+      tooltip: { trigger: "axis" },
+      legend: { textStyle: { color: "#cfe0ff" } },
+      grid: { left: 40, right: 10, top: 30, bottom: 30 },
+      xAxis: { type: "category", data: xs, axisLabel: { color: "#a9b7d6" } },
+      yAxis: { type: "value", min: 0, max: 1, axisLabel: { color: "#a9b7d6" } },
+      series: [
+        { name: "Score", type: "line", data: score, smooth: true, showSymbol: false, lineStyle: { color: "#ffd166" } },
+        { name: "Conf", type: "line", data: conf, smooth: true, showSymbol: false, lineStyle: { color: "#ff7a7a" } }
+      ]
+    });
+  }
+
+  function renderAttackPie(events){
+    const map = {};
+    for (const ev of events){
+      const k = ev.final_attack_type || ev.attack_type || "UNKNOWN";
+      map[k] = (map[k] || 0) + 1;
+    }
+    const data = Object.entries(map).map(([name, value]) => ({ name, value }));
+    chartAttackPie.setOption({
+      tooltip: { trigger: "item" },
+      series: [{
+        type: "pie",
+        radius: ["35%", "70%"],
+        label: { color: "#cfe0ff" },
+        data
+      }]
+    });
+  }
+
+  function renderMlScore(series){
+    const xs = series.map(s => new Date(s.ts * 1000).toLocaleTimeString());
+    const ys = series.map(s => s.dl_p_attack);
+    chartMlScore.setOption({
+      tooltip: { trigger: "axis" },
+      grid: { left: 40, right: 10, top: 20, bottom: 30 },
+      xAxis: { type: "category", data: xs, axisLabel: { color: "#a9b7d6" } },
+      yAxis: { type: "value", min: 0, max: 1, axisLabel: { color: "#a9b7d6" } },
+      series: [{ type: "line", data: ys, smooth: true, showSymbol: false, lineStyle: { color: "#8ef0ff" } }]
+    });
+  }
+
+  function renderMlAgree(agree){
+    const data = [
+      { name: "rules", value: agree.rules || 0 },
+      { name: "dl", value: agree.dl || 0 },
+      { name: "hybrid", value: agree.hybrid || 0 },
+    ];
+    chartMlAgree.setOption({
+      tooltip: { trigger: "item" },
+      series: [{
+        type: "pie",
+        radius: ["35%", "70%"],
+        label: { color: "#cfe0ff" },
+        data
+      }]
+    });
+  }
+
+  function renderTopk(topk){
+    const src = topk.top_src_ip || [];
+    const dport = topk.top_dport || [];
+
+    chartTopSrc.setOption({
+      grid: { left: 60, right: 10, top: 10, bottom: 20 },
+      xAxis: { type: "value", axisLabel: { color: "#a9b7d6" } },
+      yAxis: { type: "category", data: src.map(x => x[0]), axisLabel: { color: "#a9b7d6" } },
+      series: [{ type: "bar", data: src.map(x => x[1]), itemStyle: { color: "#29d17e" } }]
+    });
+
+    chartTopDport.setOption({
+      grid: { left: 60, right: 10, top: 10, bottom: 20 },
+      xAxis: { type: "value", axisLabel: { color: "#a9b7d6" } },
+      yAxis: { type: "category", data: dport.map(x => x[0]), axisLabel: { color: "#a9b7d6" } },
+      series: [{ type: "bar", data: dport.map(x => x[1]), itemStyle: { color: "#ffb347" } }]
+    });
+  }
+
+  async function refresh(){
+    try{
+      const [events, series, topk, dbs, mlSeries, mlAgree, rules, fb] = await Promise.all([
+        loadEvents(), loadSeries(), loadTopk(), loadDbStatus(), loadMlSeries(), loadMlAgree(), loadRules(), loadFeedbackStats()
+      ]);
+      updateSummary(events);
+      updateStats(events);
+      renderTable(events);
+      renderSeries(series);
+      renderMlScore(mlSeries);
+      renderMlAgree(mlAgree);
+      renderAttackPie(events);
+      renderTopk(topk);
+      dbEvents.textContent = dbs.events ?? 0;
+      dbAlerts.textContent = dbs.alerts ?? 0;
+      dbLastTs.textContent = dbs.events_last_ts ? fmtTime(dbs.events_last_ts) : "-";
+      if (rules && rules.decision){
+        suspectScore.value = rules.decision.suspect_score ?? 4;
+        attackScore.value = rules.decision.attack_score ?? 8;
+        dlSuspectScore.value = rules.decision.dl_suspect_score ?? rules.decision.ml_suspect_score ?? 0.5;
+        dlAttackScore.value = rules.decision.dl_attack_score ?? rules.decision.ml_attack_score ?? 0.7;
       }
+      cntFP.textContent = fb.fp || 0;
+      cntFN.textContent = fb.fn || 0;
+      cntTP.textContent = fb.tp || 0;
+      cntTN.textContent = fb.tn || 0;
+      setStatus("ok", "DB 已连接");
     }catch(e){
-      statusBadge.className = "badge bad";
-      statusText.textContent = "加载失败";
+      setStatus("bad", "请求失败");
     }
   }
 
-  function setStatus(mode, text){
-    statusBadge.classList.remove("ok","warn","bad");
-    statusBadge.classList.add(mode);
-    statusText.textContent = text;
-  }
-
-  function startStream(){
-    if (es) es.close();
-    es = new EventSource("/api/stream");
-
-    es.onopen = ()=> setStatus("ok", "实时已连接");
-    es.onerror = ()=> setStatus("bad", "连接断开(自动重连)");
-
-    es.onmessage = (msg)=>{
-      if (paused) return;
-      const line = msg.data;
-      if (!line) return;
-      try{
-        const ev = JSON.parse(line);
-        store.push(ev);
-
-        // store trim
-        const maxRows = parseInt(maxRowsInput.value || "200", 10);
-        if (store.length > maxRows * 10) store = store.slice(-maxRows * 6);
-
-        pushPoint(ev);
-        appendRow(ev, false); // already pushed
-      }catch(e){
-        // ignore
-      }
-    };
-  }
-
-  // ---------- Buttons ----------
-  document.getElementById("btnLoad").addEventListener("click", loadRecent);
-  document.getElementById("btnClear").addEventListener("click", ()=>{
-    tbody.innerHTML = "";
-    rowCount = 0;
-    store = [];
-    points = [];
-    cBenign = cSuspect = cAttack = 0;
-    maxPps = maxBps = 0;
-    cntBenign.textContent = "0";
-    cntSuspect.textContent = "0";
-    cntAttack.textContent = "0";
-    maxPpsEl.textContent = "0";
-    maxBpsEl.textContent = "0";
-    lastAlertLabel.textContent = "暂无";
-    lastAlertMeta.textContent = "-";
-    lastAlertReasons.textContent = "-";
-    lastAlertTop.textContent = "-";
-  });
-
-  document.getElementById("btnPause").addEventListener("click", (e)=>{
-    paused = !paused;
-    e.target.textContent = paused ? "继续" : "暂停";
-    setStatus(paused ? "warn" : "ok", paused ? "已暂停（仍保持连接）" : "实时已连接");
-  });
-
-  filterMode.addEventListener("change", rebuildTable);
-  maxRowsInput.addEventListener("change", rebuildTable);
-  chartWindowInput.addEventListener("change", ()=>{
-    // trim points quickly based on latest ts
-    if (points.length){
-      const winSec = parseInt(chartWindowInput.value || "60", 10);
-      const latest = points[points.length-1].ts;
-      const cutoff = latest - winSec;
-      points = points.filter(p => p.ts >= cutoff);
+  document.getElementById("btnLoad").addEventListener("click", refresh);
+  document.getElementById("btnAuto").addEventListener("click", (e)=>{
+    auto = !auto;
+    e.target.textContent = auto ? "自动刷新: ON" : "自动刷新: OFF";
+    if (auto){
+      refresh();
+      timer = setInterval(refresh, 2000);
+    }else if (timer){
+      clearInterval(timer);
+      timer = null;
     }
   });
 
-  // ---------- Init ----------
+  labelFilter.addEventListener("change", refresh);
+  attackTypeFilter.addEventListener("change", refresh);
+  maxRowsInput.addEventListener("change", refresh);
+  minutesInput.addEventListener("change", refresh);
+  bucketSecInput.addEventListener("change", refresh);
+  document.getElementById("btnSaveRules").addEventListener("click", async ()=>{
+    try{
+      await saveRules();
+      await refresh();
+    }catch(e){
+      // ignore
+    }
+  });
+
   setStatus("warn", "连接中...");
-  loadRecent().finally(()=>{
-    startStream();
-    tickChart();
-  });
+  refresh();
+  timer = setInterval(refresh, 2000);
 </script>
 </body>
 </html>

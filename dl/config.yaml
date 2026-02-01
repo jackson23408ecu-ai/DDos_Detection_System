@@ -1,0 +1,44 @@
+dataset:
+  input_glob: data/archive/*.parquet
+  output_dir: dl/data
+  window_sec: 1.0
+  sample_per_file: 2000
+  min_flows_per_window: 1
+  label_col: Label
+  timestamp_cols:
+    - Timestamp
+    - Flow Start
+    - Flow Start Time
+    - Flow Start Timestamp
+    - Start Time
+    - StartTime
+  split_strategy: by_file
+  train_ratio: 0.8
+  random_seed: 42
+
+train:
+  seq_len: 10
+  stride: 1
+  batch_size: 256
+  epochs: 2
+  lr: 0.001
+  hidden: 64
+  kernel: 3
+  dropout: 0.2
+  model_out: models/dl_model.pt
+  scaler_out: models/dl_scaler.json
+  metrics_out: models/dl_metrics.json
+
+service:
+  host: 0.0.0.0
+  port: 8001
+  model_path: models/dl_model.pt
+  scaler_path: models/dl_scaler.json
+
+integration:
+  dl_url: http://127.0.0.1:8001/predict
+  timeout_sec: 0.6
+  rule_confidence_min: 0.6
+  dl_attack_score: 0.7
+  dl_suspect_score: 0.5
+  seq_len: 10
