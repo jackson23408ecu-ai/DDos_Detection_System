@@ -1,6 +1,7 @@
 dataset:
   input_glob: data/archive/*.parquet
   output_dir: dl/data
+  public_output_dir: dl/data_public
   window_sec: 1.0
   sample_per_file: 2000
   min_flows_per_window: 1
@@ -20,7 +21,18 @@ train:
   seq_len: 10
   stride: 1
   batch_size: 256
-  epochs: 2
+  use_public_pretrain: true
+  public_data_dir: dl/data_public
+  pretrain_epochs: 3
+  finetune_epochs: 8
+  pretrain_lr: 0.001
+  finetune_lr: 0.0007
+  attack_threshold: 0.6
+  benign_class: BENIGN
+  core_attack_classes:
+    - TCP_SYN_FLOOD
+    - UDP_FLOOD
+    - ICMP_FLOOD
   lr: 0.001
   hidden: 64
   kernel: 3

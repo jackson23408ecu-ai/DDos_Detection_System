@@ -26,3 +26,8 @@ log/
 # VM shared / temp
 *.swp
 *.tmp
+
+# Datasets / generated artifacts
+data/archive/
+dl/data/
+dl/data_public/

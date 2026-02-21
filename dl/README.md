@@ -28,12 +28,53 @@ python3 dl/dataset/build_window_dataset.py --config dl/config.yaml
 - 若 Parquet 不包含 Source/Destination IP 或 Port 列，则 `uniq_src/uniq_dst/uniq_pair/entropy` 会置为 0，`uniq_flow5` 以窗口内 flow 数量近似。
 - 若缺少时间戳列，则使用行号序作为时间轴（窗口聚合依然按顺序进行）。
 
+## 2.1 用在线真实流量重建训练集（推荐）
+
+当 CICDDoS2019 特征分布与实验环境差异较大时，优先使用在线数据重训。
+
+1) 采集并入库（务必包含 benign）：
+
+```bash
+WRITE_EVENTS=1 sudo bash scripts/run_pipeline.sh ens33 --ml
+python3 tools/ingest_sqlite.py
+```
+
+2) 从 `events.db` 导出可训练样本到 `dl/data`：
+
+```bash
+python3 tools/export_training_dataset.py \
+  --db logs/events.db \
+  --table events \
+  --mode multiclass \
+  --attack-types TCP_SYN_FLOOD,UDP_FLOOD,ICMP_FLOOD \
+  --attack-sources rules \
+  --benign-sources rules \
+  --benign-max-score 0 \
+  --output-dir dl/data
+```
+
+说明：
+- 严格集默认丢弃 `SUSPECT` / 未定型 `ATTACK`。
+- benign 默认只取 `decision_source=rules` 且 `score<=0` 的窗口。
+- `class_names` 会写入 `dl/data/meta.json`，训练时自动读取。
+
+3) 从公开 Parquet 构建多分类预训练集（扩展候选类型）：
+
+```bash
+python3 dl/dataset/build_public_multiclass_dataset.py \
+  --config dl/config.yaml \
+  --output-dir dl/data_public \
+  --mode full
+```
+
 ## 3. 训练（1D-CNN 时序模型）
 
 把 `[N,F]` 组装为 `[N-T+1,T,F]` 并训练，输出：
 - `models/dl_model.pt`
 - `models/dl_scaler.json`
 - `models/dl_metrics.json`
+
+训练流程：公开数据预训练 + 在线严格数据微调（由 `dl/config.yaml` 控制）
 
 命令：
 
@@ -64,10 +105,18 @@ POST `/predict` 输入示例（需满足长度 T，默认 10）：
 
 ```json
 {
-  "p_attack": 0.12,
-  "label": "benign",
-  "attack_type": "UNKNOWN",
-  "model_version": "20250101-120000"
+  "p_attack": 0.82,
+  "label": "attack",
+  "attack_type": "UDP_FLOOD",
+  "model_version": "20260217-200000",
+  "type_probs": {
+    "BENIGN": 0.18,
+    "UDP_FLOOD": 0.42,
+    "TCP_SYN_FLOOD": 0.29,
+    "ICMP_FLOOD": 0.11
+  },
+  "extra_type": "UDP_FLOOD",
+  "extra_confidence": 0.42
 }
 ```
 
@@ -83,7 +132,7 @@ DL_URL=http://127.0.0.1:8001/predict \
 融合策略：
 - 规则识别到明确攻击（UDP_FLOOD/TCP_SYN_FLOOD/ICMP_FLOOD）且置信度达阈值 → 直接输出
 - 其他灰区/慢速/未知 → 调用 DL 推理
-- DL 成功 → 写入 `decision_source/final_label/final_attack_type/dl_p_attack`
+- DL 成功 → 写入 `decision_source/final_label/final_attack_type/dl_p_attack/dl_type_probs/dl_extra_type`
 - DL 失败/超时 → 回退规则输出
 
 ## 6. events/alerts 入库与保留策略

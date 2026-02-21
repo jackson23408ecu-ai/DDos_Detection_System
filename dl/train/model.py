@@ -9,10 +9,17 @@ class CNN1D(nn.Module):
     """
     Input: x [B, T, F]
     Internally: transpose to [B, F, T] and apply 1D conv over time.
-    Output: logits [B]
+    Output: logits [B, C]
     """
 
-    def __init__(self, num_features: int, hidden: int = 64, kernel: int = 3, dropout: float = 0.2):
+    def __init__(
+        self,
+        num_features: int,
+        hidden: int = 64,
+        kernel: int = 3,
+        dropout: float = 0.2,
+        num_classes: int = 2,
+    ):
         super().__init__()
         pad = kernel // 2
         self.net = nn.Sequential(
@@ -30,11 +37,10 @@ class CNN1D(nn.Module):
         self.head = nn.Sequential(
             nn.Flatten(),
             nn.Dropout(dropout),
-            nn.Linear(hidden * 2, 1),
+            nn.Linear(hidden * 2, max(2, int(num_classes))),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = x.transpose(1, 2)  # [B, F, T]
         x = self.net(x)
-        x = self.head(x)
-        return x.squeeze(1)
+        return self.head(x)

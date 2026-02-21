@@ -15,17 +15,117 @@
     "syn_ratio_high": 3,
     "syn_only_ratio_high": 3
   },
+  "type_rules": {
+    "tcp_syn_flood": {
+      "min_pps": 120,
+      "min_tcp_cnt": 80,
+      "min_syn_ratio": 0.55,
+      "min_syn_only_ratio": 0.25
+    },
+    "tcp_ack_flood": {
+      "enabled": true,
+      "min_pps": 350,
+      "min_tcp_cnt": 250,
+      "min_ack_ratio": 0.9,
+      "max_syn_ratio": 0.08,
+      "min_uniq_src": 1,
+      "min_uniq_flow5": 1,
+      "allow_ssh_dominant": false,
+      "max_ssh_dport_ratio": 0.2
+    },
+    "tcp_rst_flood": {
+      "enabled": true,
+      "min_pps": 350,
+      "min_tcp_cnt": 250,
+      "min_rst_ratio": 0.5,
+      "min_uniq_src": 1,
+      "min_uniq_flow5": 1,
+      "allow_ssh_dominant": false,
+      "max_ssh_dport_ratio": 0.2
+    },
+    "udp_flood": {
+      "min_pps": 150,
+      "min_udp_cnt": 90,
+      "min_udp_ratio": 0.65,
+      "min_uniq_flow5": 20
+    },
+    "dns_amp_flood": {
+      "enabled": true,
+      "min_pps": 120,
+      "min_udp_cnt": 80,
+      "min_udp_ratio": 0.6,
+      "min_port_hits": 45
+    },
+    "ntp_amp_flood": {
+      "enabled": true,
+      "min_pps": 120,
+      "min_udp_cnt": 80,
+      "min_udp_ratio": 0.6,
+      "min_port_hits": 45
+    },
+    "ssdp_amp_flood": {
+      "enabled": true,
+      "min_pps": 120,
+      "min_udp_cnt": 80,
+      "min_udp_ratio": 0.55,
+      "min_port_hits": 45
+    },
+    "cldap_amp_flood": {
+      "enabled": true,
+      "min_pps": 120,
+      "min_udp_cnt": 80,
+      "min_udp_ratio": 0.55,
+      "min_port_hits": 45
+    },
+    "memcached_amp_flood": {
+      "enabled": true,
+      "min_pps": 100,
+      "min_udp_cnt": 70,
+      "min_udp_ratio": 0.5,
+      "min_port_hits": 40
+    },
+    "snmp_amp_flood": {
+      "enabled": true,
+      "min_pps": 120,
+      "min_udp_cnt": 80,
+      "min_udp_ratio": 0.55,
+      "min_port_hits": 45
+    },
+    "icmp_flood": {
+      "min_pps": 120,
+      "min_icmp_cnt": 60,
+      "min_icmp_ratio": 0.6
+    }
+  },
   "decision": {
     "suspect_score": 4,
     "attack_score": 8,
     "dl_suspect_score": 0.5,
     "dl_attack_score": 0.7,
     "rule_confidence_min": 0.6,
+    "type_confirm_min": 0.45,
+    "gate_min_rule_score": 0.0,
+    "gate_low_pps": 400.0,
+    "gate_low_uniq_src": 3,
+    "gate_low_uniq_flow5": 30,
+    "gate_low_syn_ratio": 0.2,
+    "gate_low_syn_only_ratio": 0.05,
+    "gate_streak": 1,
+    "gate_sample_every": 20,
+    "gate_cooldown_windows": 8,
     "dl_seq_len": 10,
     "known_rule_attacks": [
       "UDP_FLOOD",
       "TCP_SYN_FLOOD",
-      "ICMP_FLOOD"
+      "ICMP_FLOOD",
+      "TCP_ACK_FLOOD",
+      "TCP_RST_FLOOD",
+      "DNS_AMP_FLOOD",
+      "NTP_AMP_FLOOD",
+      "SSDP_AMP_FLOOD",
+      "CLDAP_AMP_FLOOD",
+      "MEMCACHED_AMP_FLOOD",
+      "SNMP_AMP_FLOOD"
     ]
   }
 }

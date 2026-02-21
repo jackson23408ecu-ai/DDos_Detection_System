@@ -22,6 +22,9 @@ CREATE TABLE IF NOT EXISTS events (
   dl_p_attack REAL,
   dl_model_version TEXT,
   dl_error TEXT,
+  dl_type_probs TEXT,
+  dl_extra_type TEXT,
+  dl_extra_confidence REAL,
   rule_label TEXT,
   rule_attack_type TEXT,
   score REAL,
@@ -48,6 +51,9 @@ CREATE TABLE IF NOT EXISTS alerts (
   dl_p_attack REAL,
   dl_model_version TEXT,
   dl_error TEXT,
+  dl_type_probs TEXT,
+  dl_extra_type TEXT,
+  dl_extra_confidence REAL,
   rule_label TEXT,
   rule_attack_type TEXT,
   score REAL,
@@ -80,6 +86,9 @@ EXTRA_COLUMNS = [
     ("dl_p_attack", "dl_p_attack REAL"),
     ("dl_model_version", "dl_model_version TEXT"),
     ("dl_error", "dl_error TEXT"),
+    ("dl_type_probs", "dl_type_probs TEXT"),
+    ("dl_extra_type", "dl_extra_type TEXT"),
+    ("dl_extra_confidence", "dl_extra_confidence REAL"),
     ("rule_label", "rule_label TEXT"),
     ("rule_attack_type", "rule_attack_type TEXT"),
 ]
@@ -162,6 +171,15 @@ def build_row(obj: dict) -> tuple:
         dl_p_attack = None
     dl_model_version = obj.get("dl_model_version", None)
     dl_error = obj.get("dl_error", None)
+    dl_type_probs = obj.get("dl_type_probs", None)
+    if not isinstance(dl_type_probs, dict):
+        dl_type_probs = None
+    dl_extra_type = obj.get("dl_extra_type", None)
+    dl_extra_confidence = obj.get("dl_extra_confidence", None)
+    try:
+        dl_extra_confidence = float(dl_extra_confidence) if dl_extra_confidence is not None else None
+    except Exception:
+        dl_extra_confidence = None
     rule_label = obj.get("rule_label", obj.get("label", "unknown"))
     rule_attack_type = obj.get("rule_attack_type", obj.get("attack_type", "UNKNOWN"))
 
@@ -175,6 +193,9 @@ def build_row(obj: dict) -> tuple:
         dl_p_attack,
         dl_model_version,
         dl_error,
+        (json.dumps(dl_type_probs, ensure_ascii=False) if dl_type_probs is not None else None),
+        dl_extra_type,
+        dl_extra_confidence,
         rule_label,
         rule_attack_type,
         obj.get("score", 0),
@@ -230,8 +251,8 @@ def ingest_file(
 
     if rows:
         conn.executemany(
-            f"INSERT INTO {table} (ts,label,attack_type,final_label,final_attack_type,decision_source,dl_p_attack,dl_model_version,dl_error,rule_label,rule_attack_type,score,confidence,reasons,features,pps,bps,uniq_src,uniq_flow5,syn_ratio,syn_only_ratio,top_src_ip,top_dport) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            f"INSERT INTO {table} (ts,label,attack_type,final_label,final_attack_type,decision_source,dl_p_attack,dl_model_version,dl_error,dl_type_probs,dl_extra_type,dl_extra_confidence,rule_label,rule_attack_type,score,confidence,reasons,features,pps,bps,uniq_src,uniq_flow5,syn_ratio,syn_only_ratio,top_src_ip,top_dport) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             rows,
         )
 

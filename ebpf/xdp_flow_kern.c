@@ -20,8 +20,8 @@ struct flow_event {
     __u32 dst_ip;       // 目的 IP（网络序）
     __u16 src_port;     // 源端口（网络序）
     __u16 dst_port;     // 目的端口（网络序）
-    __u8  proto;        // IPPROTO_TCP / IPPROTO_UDP
-    __u8  tcp_flags;    // TCP flags（CWR|ECE|URG|ACK|PSH|RST|SYN|FIN），UDP 为 0
+    __u8  proto;        // IPPROTO_TCP / IPPROTO_UDP / IPPROTO_ICMP
+    __u8  tcp_flags;    // TCP flags（CWR|ECE|URG|ACK|PSH|RST|SYN|FIN），非 TCP 为 0
     __u16 _pad;         // 对齐
     __u32 pkt_len;      // 包大小：XDP 可见帧长度 data_end - data
 };
@@ -87,7 +87,7 @@ int xdp_flow_collector(struct xdp_md *ctx)
         return XDP_PASS;
 
     __u8 proto = iph->protocol;
-    if (proto != IPPROTO_TCP && proto != IPPROTO_UDP)
+    if (proto != IPPROTO_TCP && proto != IPPROTO_UDP && proto != IPPROTO_ICMP)
         return XDP_PASS;
 
     /* ringbuf 申请事件空间 */
@@ -130,7 +130,7 @@ int xdp_flow_collector(struct xdp_md *ctx)
         }
         e->tcp_flags = p[13];
 
-    } else { // UDP
+    } else if (proto == IPPROTO_UDP) { // UDP
         struct udphdr *udp = l4;
         if (!ptr_ok(udp, data_end, sizeof(*udp))) {
             bpf_ringbuf_discard(e, 0);
@@ -138,6 +138,15 @@ int xdp_flow_collector(struct xdp_md *ctx)
         }
         e->src_port = udp->source;
         e->dst_port = udp->dest;
+        e->tcp_flags = 0;
+    } else { // ICMP
+        /* ICMP 无端口字段，保持 0，仅上报 proto=1 供上层统计 */
+        if (!ptr_ok(l4, data_end, 1)) {
+            bpf_ringbuf_discard(e, 0);
+            return XDP_PASS;
+        }
+        e->src_port = 0;
+        e->dst_port = 0;
         e->tcp_flags = 0;
     }
 

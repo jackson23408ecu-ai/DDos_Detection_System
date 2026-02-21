@@ -65,6 +65,8 @@ sudo bash scripts/run_pipeline.sh ens33 --ml
 
 - `ens33` 为网卡名，按需替换（可用 `ip a` 查看）
 - 若只用规则引擎，可去掉 `--ml`
+- 默认仅写 `alerts.jsonl`（attack/suspect），不持久化 benign
+- 如需同时写 `events.jsonl`（含 benign 全量窗口），可开启：`WRITE_EVENTS=1 sudo bash scripts/run_pipeline.sh ens33 --ml`
 
 ### 4) 启动 Web
 
@@ -91,6 +93,38 @@ python3 dl/dataset/build_window_dataset.py --config dl/config.yaml
 - `dl/data/X.npy`
 - `dl/data/y.npy`
 - `dl/data/meta.json`
+
+### 1.1) 推荐：从在线流量导出训练集（避免域偏移）
+
+先确保 pipeline 把全量窗口写到 `events`：
+
+```bash
+WRITE_EVENTS=1 sudo bash scripts/run_pipeline.sh ens33 --ml
+python3 tools/ingest_sqlite.py
+```
+
+然后导出在线严格训练集（4 类）：
+
+```bash
+python3 tools/export_training_dataset.py \
+  --db logs/events.db \
+  --table events \
+  --mode multiclass \
+  --attack-types TCP_SYN_FLOOD,UDP_FLOOD,ICMP_FLOOD \
+  --attack-sources rules \
+  --benign-sources rules \
+  --benign-max-score 0 \
+  --output-dir dl/data
+```
+
+构建公开数据预训练集（扩展类型候选）：
+
+```bash
+python3 dl/dataset/build_public_multiclass_dataset.py \
+  --config dl/config.yaml \
+  --output-dir dl/data_public \
+  --mode full
+```
 
 ### 2) 训练时序模型（1D-CNN）
 
@@ -130,6 +164,9 @@ python3 tools/ingest_sqlite.py --benign-sample-rate 0.1
 ## 关键配置
 
 - `rule/rules.json`：规则阈值与权重
+- `rule/rules.json -> type_rules`：规则直返类型签名（`tcp_syn/udp/icmp + ack/rst + dns/ntp/ssdp/cldap/memcached/snmp`）
+- `rule/rules.json -> decision.type_confirm_min`：规则类型确认阈值，命中后直接输出 `attack + 具体类型`
+- `rule/rules.json -> decision.gate_*`：低风险门控（多条件 + 抽检 + 冷却期），用于降低 SSH 等正常流量被 DL 误判为 `suspect`
 - `dl/config.yaml`：DL 数据/训练/服务参数
 - `scripts/run_pipeline.sh`：运行入口（支持 `--ml` 和环境变量 `DL_URL`）
 

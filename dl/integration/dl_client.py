@@ -13,6 +13,9 @@ class DLResult:
     label: str = "unknown"
     attack_type: str = "UNKNOWN"
     model_version: str = "unknown"
+    type_probs: Optional[Dict[str, float]] = None
+    extra_type: Optional[str] = None
+    extra_confidence: Optional[float] = None
     error: Optional[str] = None
 
 
@@ -40,4 +43,9 @@ class DLClient:
             label=str(data.get("label", "unknown")),
             attack_type=str(data.get("attack_type", "UNKNOWN")),
             model_version=str(data.get("model_version", "unknown")),
+            type_probs=(data.get("type_probs") if isinstance(data.get("type_probs"), dict) else None),
+            extra_type=(str(data.get("extra_type")) if data.get("extra_type") is not None else None),
+            extra_confidence=(
+                float(data.get("extra_confidence")) if data.get("extra_confidence") is not None else None
+            ),
         )

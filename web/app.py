@@ -63,6 +63,16 @@ def _safe_json_loads(s, fallback):
         return fallback
 
 
+def _row_get(row, key, default=None):
+    try:
+        if key in row.keys():
+            v = row[key]
+            return default if v is None else v
+    except Exception:
+        return default
+    return default
+
+
 @app.get("/")
 def index():
     return send_from_directory("static", "index.html")
@@ -77,7 +87,8 @@ def api_alerts():
 
 @app.get("/api/events")
 def api_events():
-    path = Path(request.args.get("path", str(DEFAULT_EVENTS)))
+    # default to alerts-only feed for better performance and cleaner view
+    path = Path(request.args.get("path", str(DEFAULT_ALERTS)))
     limit = int(request.args.get("limit", "200"))
     return jsonify(tail_jsonl(path, limit))
 
@@ -85,6 +96,9 @@ def api_events():
 @app.get("/api/events_db")
 def api_events_db():
     path = Path(request.args.get("db", str(DEFAULT_DB)))
+    table = str(request.args.get("table", "alerts")).strip().lower()
+    if table not in ("events", "alerts"):
+        table = "alerts"
     limit = int(request.args.get("limit", "200"))
     offset = int(request.args.get("offset", "0"))
     label = request.args.get("label", "").strip()
@@ -99,15 +113,20 @@ def api_events_db():
         where.append("COALESCE(final_attack_type, attack_type) = ?")
         params.append(attack_type)
 
-    sql = "SELECT * FROM events"
+    sql = f"SELECT * FROM {table}"
     if where:
         sql += " WHERE " + " AND ".join(where)
+    elif table == "alerts":
+        sql += " WHERE COALESCE(final_label, label) IN ('attack','suspect')"
     sql += " ORDER BY ts DESC LIMIT ? OFFSET ?"
     params.extend([limit, offset])
 
     conn = get_db(path)
     try:
-        rows = conn.execute(sql, params).fetchall()
+        try:
+            rows = conn.execute(sql, params).fetchall()
+        except sqlite3.OperationalError:
+            rows = []
     finally:
         conn.close()
 
@@ -119,12 +138,15 @@ def api_events_db():
                 "ts": r["ts"],
                 "label": r["label"],
                 "attack_type": r["attack_type"],
-                "final_label": r["final_label"] or r["label"],
-                "final_attack_type": r["final_attack_type"] or r["attack_type"],
-                "decision_source": r["decision_source"] or "rules",
-                "dl_p_attack": r["dl_p_attack"],
-                "dl_model_version": r["dl_model_version"],
-                "dl_error": r["dl_error"],
+                "final_label": _row_get(r, "final_label", r["label"]),
+                "final_attack_type": _row_get(r, "final_attack_type", r["attack_type"]),
+                "decision_source": _row_get(r, "decision_source", "rules"),
+                "dl_p_attack": _row_get(r, "dl_p_attack"),
+                "dl_model_version": _row_get(r, "dl_model_version"),
+                "dl_error": _row_get(r, "dl_error"),
+                "dl_type_probs": _safe_json_loads(_row_get(r, "dl_type_probs"), {}),
+                "dl_extra_type": _row_get(r, "dl_extra_type"),
+                "dl_extra_confidence": _row_get(r, "dl_extra_confidence"),
                 "score": r["score"],
                 "confidence": r["confidence"],
                 "reasons": _safe_json_loads(r["reasons"], []),
@@ -138,6 +160,9 @@ def api_events_db():
 @app.get("/api/series")
 def api_series():
     path = Path(request.args.get("db", str(DEFAULT_DB)))
+    table = str(request.args.get("table", "alerts")).strip().lower()
+    if table not in ("events", "alerts"):
+        table = "alerts"
     minutes = int(request.args.get("minutes", "60"))
     bucket_sec = int(request.args.get("bucket_sec", "5"))
 
@@ -145,23 +170,26 @@ def api_series():
 
     conn = get_db(path)
     try:
-        rows = conn.execute(
-            """
-            SELECT
-              (CAST(ts / ? AS INTEGER) * ?) AS bucket,
-              AVG(pps) AS pps,
-              AVG(bps) AS bps,
-              AVG(score) AS score,
-              AVG(confidence) AS confidence,
-              SUM(CASE WHEN COALESCE(final_label, label) IN ('suspect','attack') THEN 1 ELSE 0 END) AS alert_count,
-              COUNT(*) AS total
-            FROM events
-            WHERE ts >= ?
-            GROUP BY bucket
-            ORDER BY bucket ASC
-            """,
-            (bucket_sec, bucket_sec, since_ts),
-        ).fetchall()
+        try:
+            rows = conn.execute(
+                f"""
+                SELECT
+                  (CAST(ts / ? AS INTEGER) * ?) AS bucket,
+                  AVG(pps) AS pps,
+                  AVG(bps) AS bps,
+                  AVG(score) AS score,
+                  AVG(confidence) AS confidence,
+                  SUM(CASE WHEN COALESCE(final_label, label) IN ('suspect','attack') THEN 1 ELSE 0 END) AS alert_count,
+                  COUNT(*) AS total
+                FROM {table}
+                WHERE ts >= ?
+                GROUP BY bucket
+                ORDER BY bucket ASC
+                """,
+                (bucket_sec, bucket_sec, since_ts),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            rows = []
     finally:
         conn.close()
 
@@ -181,6 +209,78 @@ def api_series():
     return jsonify(out)
 
 
+@app.get("/api/ddos_series")
+def api_ddos_series():
+    path = Path(request.args.get("db", str(DEFAULT_DB)))
+    minutes = int(request.args.get("minutes", "60"))
+    bucket_sec = int(request.args.get("bucket_sec", "5"))
+    since_ts = time.time() - (minutes * 60)
+
+    conn = get_db(path)
+    try:
+        try:
+            rows = conn.execute(
+                """
+                SELECT
+                  ts,
+                  COALESCE(final_label, label) AS final_label,
+                  COALESCE(final_attack_type, attack_type) AS final_attack_type
+                FROM alerts
+                WHERE ts >= ?
+                ORDER BY ts ASC
+                """,
+                (since_ts,),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            rows = []
+    finally:
+        conn.close()
+
+    known_types = []
+    if RULES_JSON.exists():
+        try:
+            with open(RULES_JSON, "r", encoding="utf-8") as f:
+                rules = json.load(f) or {}
+            known_types = [str(x).strip().upper() for x in (rules.get("decision", {}) or {}).get("known_rule_attacks", []) if str(x).strip()]
+        except Exception:
+            known_types = []
+
+    buckets = {}
+    observed_types = set()
+
+    for r in rows:
+        ts = float(r["ts"] or 0.0)
+        bucket = int(ts // bucket_sec) * bucket_sec
+        label = str(r["final_label"] or "").strip().lower()
+        attack_type = str(r["final_attack_type"] or "UNKNOWN").strip().upper()
+
+        b = buckets.setdefault(
+            bucket,
+            {
+                "ts": bucket,
+                "total_ddos": 0,
+                "attack_total": 0,
+                "suspect": 0,
+                "by_type": {},
+            },
+        )
+
+        if label == "attack":
+            b["total_ddos"] += 1
+            b["attack_total"] += 1
+            if attack_type in ("", "BENIGN", "SUSPECT", "ATTACK"):
+                attack_type = "UNKNOWN"
+            observed_types.add(attack_type)
+            b["by_type"][attack_type] = int(b["by_type"].get(attack_type, 0)) + 1
+        elif label == "suspect":
+            b["total_ddos"] += 1
+            b["suspect"] += 1
+
+    types = list(dict.fromkeys(known_types + sorted(observed_types)))
+    series = [buckets[k] for k in sorted(buckets.keys())]
+    return jsonify({"types": types, "series": series})
+
+
 @app.get("/api/topk")
 def api_topk():
     path = Path(request.args.get("db", str(DEFAULT_DB)))
@@ -190,10 +290,13 @@ def api_topk():
 
     conn = get_db(path)
     try:
-        rows = conn.execute(
-            "SELECT top_src_ip, top_dport FROM events WHERE ts >= ? ORDER BY ts DESC",
-            (since_ts,),
-        ).fetchall()
+        try:
+            rows = conn.execute(
+                "SELECT top_src_ip, top_dport FROM alerts WHERE ts >= ? ORDER BY ts DESC",
+                (since_ts,),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            rows = []
     finally:
         conn.close()
 
@@ -232,10 +335,16 @@ def api_db_status():
     path = Path(request.args.get("db", str(DEFAULT_DB)))
     conn = get_db(path)
     try:
-        ev_cnt = conn.execute("SELECT COUNT(*) AS c FROM events").fetchone()["c"]
-        al_cnt = conn.execute("SELECT COUNT(*) AS c FROM alerts").fetchone()["c"]
-        ev_last = conn.execute("SELECT MAX(ts) AS ts FROM events").fetchone()["ts"]
-        al_last = conn.execute("SELECT MAX(ts) AS ts FROM alerts").fetchone()["ts"]
+        try:
+            ev_cnt = conn.execute("SELECT COUNT(*) AS c FROM events").fetchone()["c"]
+            al_cnt = conn.execute("SELECT COUNT(*) AS c FROM alerts").fetchone()["c"]
+            ev_last = conn.execute("SELECT MAX(ts) AS ts FROM events").fetchone()["ts"]
+            al_last = conn.execute("SELECT MAX(ts) AS ts FROM alerts").fetchone()["ts"]
+        except sqlite3.OperationalError:
+            ev_cnt = 0
+            al_cnt = 0
+            ev_last = 0
+            al_last = 0
     finally:
         conn.close()
     return jsonify(
@@ -264,7 +373,7 @@ def api_rules_update():
     with open(RULES_JSON, "r", encoding="utf-8") as f:
         rules = json.load(f)
 
-    for key in ("thresholds", "decision"):
+    for key in ("thresholds", "decision", "type_rules"):
         if key in payload and isinstance(payload[key], dict):
             rules.setdefault(key, {})
             rules[key].update(payload[key])
@@ -324,10 +433,13 @@ def api_ml_series():
 
     conn = get_db(path)
     try:
-        rows = conn.execute(
-            "SELECT ts, COALESCE(final_label, label) AS label, dl_p_attack, decision_source FROM events WHERE ts >= ? ORDER BY ts ASC",
-            (since_ts,),
-        ).fetchall()
+        try:
+            rows = conn.execute(
+                "SELECT ts, COALESCE(final_label, label) AS label, dl_p_attack, decision_source FROM alerts WHERE ts >= ? ORDER BY ts ASC",
+                (since_ts,),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            rows = []
     finally:
         conn.close()
 
@@ -360,10 +472,13 @@ def api_ml_agree():
 
     conn = get_db(path)
     try:
-        rows = conn.execute(
-            "SELECT decision_source FROM events WHERE ts >= ? ORDER BY ts DESC",
-            (since_ts,),
-        ).fetchall()
+        try:
+            rows = conn.execute(
+                "SELECT decision_source FROM alerts WHERE ts >= ? ORDER BY ts DESC",
+                (since_ts,),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            rows = []
     finally:
         conn.close()
 
