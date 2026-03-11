@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from dl.dataset.feature_spec import standardize, vectorize
+from dl.dataset.feature_spec import FEATURE_ORDER, enrich_temporal_features, standardize, vectorize_with_order
 from dl.train.model import CNN1D
 
 
@@ -35,13 +35,46 @@ class DLInference:
         self.std_list = self.std.tolist()
         self.seq_len = int(payload.get("seq_len", 10))
         self.model_version = str(payload.get("model_version", "unknown"))
+        cfg_order = payload.get("feature_order")
+        if isinstance(cfg_order, list) and cfg_order:
+            self.feature_order = [str(x) for x in cfg_order]
+        else:
+            self.feature_order = list(FEATURE_ORDER)
         self.class_names = [str(x).upper() for x in payload.get("class_names", ["BENIGN", "ATTACK"])]
         self.benign_class = str(payload.get("benign_class", "BENIGN")).upper()
         self.attack_threshold = float(payload.get("attack_threshold", 0.6))
-        core_cfg = payload.get("core_attack_classes", ["TCP_SYN_FLOOD", "UDP_FLOOD", "ICMP_FLOOD"]) or []
-        self.core_attack_classes = [str(x).upper() for x in core_cfg if str(x).strip()]
+        temporal_feats = {
+            "pps_ma5",
+            "pps_ma10",
+            "pps_cv5",
+            "pkt_ma5",
+            "uniq_src_ma5",
+            "syn_ratio_ma5",
+            "ack_ratio_ma5",
+            "burst_ratio5",
+            "slope_pps5",
+            "pkt_delta1",
+        }
+        temporal_idx = [i for i, k in enumerate(self.feature_order) if k in temporal_feats]
+        temporal_std = [float(self.std[i]) for i in temporal_idx if i < len(self.std)]
+        cfg_temporal = payload.get("temporal_enriched", None)
+        if cfg_temporal is None:
+            # Backward compatibility for old models:
+            # if temporal feature stds are ~0, training likely used raw windows only.
+            self.use_temporal_enrichment = bool(
+                temporal_std and any(s > 1e-5 for s in temporal_std)
+            )
+        else:
+            self.use_temporal_enrichment = bool(cfg_temporal)
+        core_cfg = payload.get("core_attack_classes")
+        if isinstance(core_cfg, list) and core_cfg:
+            self.core_attack_classes = [str(x).upper() for x in core_cfg if str(x).strip()]
+        else:
+            # Backward compatibility: older scaler payloads may not store core classes.
+            # In that case, treat all non-benign classes as attack candidates.
+            self.core_attack_classes = [x for x in self.class_names if x != self.benign_class]
         if not self.core_attack_classes:
-            self.core_attack_classes = ["TCP_SYN_FLOOD", "UDP_FLOOD", "ICMP_FLOOD"]
+            self.core_attack_classes = [x for x in self.class_names if x != self.benign_class]
 
         model_cfg = payload.get("model", {}) or {}
         hidden = int(model_cfg.get("hidden", 64))
@@ -65,8 +98,9 @@ class DLInference:
         if len(seq) != self.seq_len:
             raise ValueError(f"seq length must be {self.seq_len}")
         vecs = []
-        for feat in seq:
-            vec = vectorize(feat)
+        feats = enrich_temporal_features(seq) if self.use_temporal_enrichment else seq
+        for feat in feats:
+            vec = vectorize_with_order(feat, self.feature_order)
             vec = standardize(vec, self.mean_list, self.std_list)
             vecs.append(vec)
         return np.asarray(vecs, dtype=np.float32)
@@ -82,12 +116,13 @@ class DLInference:
         type_probs = {name: round(float(p), 6) for name, p in zip(cls, probs)}
         benign_prob = float(type_probs.get(self.benign_class, 0.0))
         core_probs = [(name, float(type_probs.get(name, 0.0))) for name in self.core_attack_classes]
+        core_keys_present = [name for name in self.core_attack_classes if name in type_probs]
         p_attack = float(sum(p for _, p in core_probs))
-        if p_attack <= 1e-9:
-            # Fallback for legacy models lacking explicit core classes.
-            p_attack = max(0.0, min(1.0, 1.0 - benign_prob))
-        else:
+        if core_keys_present:
             p_attack = max(0.0, min(1.0, p_attack))
+        else:
+            # If model outputs don't include core classes, keep decision conservative.
+            p_attack = 0.0
 
         top_idx = int(np.argmax(probs))
         top_type = cls[top_idx] if top_idx < len(cls) else "UNKNOWN"
@@ -104,7 +139,10 @@ class DLInference:
         top_core_prob = core_probs[0][1] if core_probs else 0.0
 
         label = "attack" if p_attack >= self.attack_threshold else "benign"
-        attack_type = top_core_type if label == "attack" else "BENIGN"
+        if label == "attack" and core_keys_present:
+            attack_type = top_core_type
+        else:
+            attack_type = "BENIGN"
 
         return {
             "p_attack": round(float(p_attack), 6),
@@ -121,5 +159,7 @@ class DLInference:
                 "top_core_type": top_core_type,
                 "top_core_prob": round(float(top_core_prob), 6),
                 "benign_prob": round(float(benign_prob), 6),
+                "core_keys_present": core_keys_present,
+                "temporal_enriched": self.use_temporal_enrichment,
             },
         }

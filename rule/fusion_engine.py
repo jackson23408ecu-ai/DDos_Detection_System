@@ -73,6 +73,13 @@ def _typed_attack_match(features: dict, rules: dict):
     icmp_ratio = ratio(icmp_cnt, total_pkts)
     ack_ratio = safe_float(features.get("ack_ratio"))
     rst_ratio = safe_float(features.get("rst_ratio"))
+    ack_only = safe_float(features.get("ack_only"))
+    syn_ack = safe_float(features.get("syn_ack"))
+    tcp_psh = safe_float(features.get("tcp_psh"))
+    pktlen_mean = safe_float(features.get("pktlen_mean"))
+    ack_only_ratio = ratio(ack_only, max(tcp_cnt, 1.0))
+    syn_ack_ratio = ratio(syn_ack, max(tcp_cnt, 1.0))
+    psh_ratio = ratio(tcp_psh, max(tcp_cnt, 1.0))
     top_dport = _top_dport_map(features)
     ssh_ratio = ratio(top_dport.get(22, 0.0), max(tcp_cnt, 1.0))
 
@@ -82,12 +89,26 @@ def _typed_attack_match(features: dict, rules: dict):
     syn_min_tcp = safe_float(syn_cfg.get("min_tcp_cnt", 80))
     syn_min_syn_ratio = safe_float(syn_cfg.get("min_syn_ratio", 0.55))
     syn_min_syn_only_ratio = safe_float(syn_cfg.get("min_syn_only_ratio", 0.25))
-    syn_hit = syn_enabled and (
+    syn_cnt = safe_float(features.get("tcp_syn"))
+    syn_min_syn_pkts = safe_float(syn_cfg.get("min_syn_pkts", max(60.0, syn_min_tcp * 0.8)))
+    syn_relaxed_ratio = safe_float(syn_cfg.get("relaxed_syn_ratio", max(0.25, syn_min_syn_ratio * 0.5)))
+    syn_relaxed_syn_only_ratio = safe_float(
+        syn_cfg.get("relaxed_syn_only_ratio", max(0.1, syn_min_syn_only_ratio * 0.5))
+    )
+    syn_strict_hit = (
         pps >= syn_min_pps
         and tcp_cnt >= syn_min_tcp
         and syn_ratio >= syn_min_syn_ratio
         and syn_only_ratio >= syn_min_syn_only_ratio
     )
+    syn_relaxed_hit = (
+        pps >= syn_min_pps
+        and tcp_cnt >= syn_min_tcp
+        and syn_cnt >= syn_min_syn_pkts
+        and syn_ratio >= syn_relaxed_ratio
+        and syn_only_ratio >= syn_relaxed_syn_only_ratio
+    )
+    syn_hit = syn_enabled and (syn_strict_hit or syn_relaxed_hit)
     syn_conf = clamp(
         0.20
         + 0.30 * clamp(ratio(pps, syn_min_pps))
@@ -133,30 +154,41 @@ def _typed_attack_match(features: dict, rules: dict):
     ack_enabled = bool(ack_cfg.get("enabled", False))
     if ack_enabled:
         ack_min_pps = safe_float(ack_cfg.get("min_pps", 350))
+        ack_single_src_min_pps = safe_float(ack_cfg.get("single_src_min_pps", max(ack_min_pps * 3.0, 1000.0)))
         ack_min_tcp = safe_float(ack_cfg.get("min_tcp_cnt", 250))
         ack_min_ratio = safe_float(ack_cfg.get("min_ack_ratio", 0.9))
+        ack_min_ack_only_ratio = safe_float(ack_cfg.get("min_ack_only_ratio", 0.55))
         ack_max_syn = safe_float(ack_cfg.get("max_syn_ratio", 0.08))
-        ack_min_uniq_src = int(ack_cfg.get("min_uniq_src", 1) or 1)
-        ack_min_uniq_flow5 = int(ack_cfg.get("min_uniq_flow5", 1) or 1)
+        ack_max_syn_ack_ratio = safe_float(ack_cfg.get("max_syn_ack_ratio", 0.06))
+        ack_max_psh_ratio = safe_float(ack_cfg.get("max_psh_ratio", 0.12))
+        ack_max_pktlen_mean = safe_float(ack_cfg.get("max_pktlen_mean", 120.0))
+        ack_min_uniq_src = int(ack_cfg.get("min_uniq_src", 3) or 3)
+        ack_min_uniq_flow5 = int(ack_cfg.get("min_uniq_flow5", 12) or 12)
         ack_allow_ssh = bool(ack_cfg.get("allow_ssh_dominant", False))
         ack_max_ssh_ratio = safe_float(ack_cfg.get("max_ssh_dport_ratio", 0.2))
         ack_port_ok = ack_allow_ssh or ssh_ratio <= ack_max_ssh_ratio
+        ack_src_ok = uniq_src >= ack_min_uniq_src or (uniq_src <= 1 and pps >= ack_single_src_min_pps)
+        ack_pktlen_ok = ack_max_pktlen_mean <= 0 or pktlen_mean <= ack_max_pktlen_mean
         ack_hit = (
             pps >= ack_min_pps
             and tcp_cnt >= ack_min_tcp
             and ack_ratio >= ack_min_ratio
+            and ack_only_ratio >= ack_min_ack_only_ratio
             and syn_ratio <= ack_max_syn
-            and uniq_src >= ack_min_uniq_src
+            and syn_ack_ratio <= ack_max_syn_ack_ratio
+            and psh_ratio <= ack_max_psh_ratio
+            and ack_src_ok
             and uniq_flow5 >= ack_min_uniq_flow5
             and ack_port_ok
+            and ack_pktlen_ok
         )
         ack_conf = clamp(
             0.22
             + 0.30 * clamp(ratio(pps, ack_min_pps))
             + 0.20 * clamp(ratio(tcp_cnt, ack_min_tcp))
             + 0.20 * clamp(ratio(ack_ratio, ack_min_ratio))
+            + 0.04 * clamp(ratio(ack_only_ratio, max(ack_min_ack_only_ratio, 1e-9)))
             + 0.04 * clamp(ratio(max(ack_max_syn - syn_ratio, 0.0), max(ack_max_syn, 1e-9)))
-            + 0.04 * clamp(ratio(uniq_src, max(ack_min_uniq_src, 1)))
         )
     else:
         ack_hit = False
@@ -166,27 +198,39 @@ def _typed_attack_match(features: dict, rules: dict):
     rst_enabled = bool(rst_cfg.get("enabled", False))
     if rst_enabled:
         rst_min_pps = safe_float(rst_cfg.get("min_pps", 350))
+        rst_single_src_min_pps = safe_float(rst_cfg.get("single_src_min_pps", max(rst_min_pps * 3.0, 1000.0)))
         rst_min_tcp = safe_float(rst_cfg.get("min_tcp_cnt", 250))
         rst_min_ratio = safe_float(rst_cfg.get("min_rst_ratio", 0.5))
-        rst_min_uniq_src = int(rst_cfg.get("min_uniq_src", 1) or 1)
-        rst_min_uniq_flow5 = int(rst_cfg.get("min_uniq_flow5", 1) or 1)
+        rst_max_syn_ratio = safe_float(rst_cfg.get("max_syn_ratio", 0.2))
+        rst_max_syn_ack_ratio = safe_float(rst_cfg.get("max_syn_ack_ratio", 0.08))
+        rst_max_psh_ratio = safe_float(rst_cfg.get("max_psh_ratio", 0.12))
+        rst_max_pktlen_mean = safe_float(rst_cfg.get("max_pktlen_mean", 120.0))
+        rst_min_uniq_src = int(rst_cfg.get("min_uniq_src", 3) or 3)
+        rst_min_uniq_flow5 = int(rst_cfg.get("min_uniq_flow5", 12) or 12)
         rst_allow_ssh = bool(rst_cfg.get("allow_ssh_dominant", False))
         rst_max_ssh_ratio = safe_float(rst_cfg.get("max_ssh_dport_ratio", 0.2))
         rst_port_ok = rst_allow_ssh or ssh_ratio <= rst_max_ssh_ratio
+        rst_src_ok = uniq_src >= rst_min_uniq_src or (uniq_src <= 1 and pps >= rst_single_src_min_pps)
+        rst_pktlen_ok = rst_max_pktlen_mean <= 0 or pktlen_mean <= rst_max_pktlen_mean
         rst_hit = (
             pps >= rst_min_pps
             and tcp_cnt >= rst_min_tcp
             and rst_ratio >= rst_min_ratio
-            and uniq_src >= rst_min_uniq_src
+            and syn_ratio <= rst_max_syn_ratio
+            and syn_ack_ratio <= rst_max_syn_ack_ratio
+            and psh_ratio <= rst_max_psh_ratio
+            and rst_src_ok
             and uniq_flow5 >= rst_min_uniq_flow5
             and rst_port_ok
+            and rst_pktlen_ok
         )
         rst_conf = clamp(
             0.22
             + 0.30 * clamp(ratio(pps, rst_min_pps))
             + 0.20 * clamp(ratio(tcp_cnt, rst_min_tcp))
             + 0.24 * clamp(ratio(rst_ratio, rst_min_ratio))
-            + 0.04 * clamp(ratio(uniq_src, max(rst_min_uniq_src, 1)))
+            + 0.02 * clamp(ratio(max(rst_max_syn_ratio - syn_ratio, 0.0), max(rst_max_syn_ratio, 1e-9)))
+            + 0.02 * clamp(ratio(max(rst_max_syn_ack_ratio - syn_ack_ratio, 0.0), max(rst_max_syn_ack_ratio, 1e-9)))
         )
     else:
         rst_hit = False
@@ -269,6 +313,7 @@ def classify_rule(features: dict, rules: dict):
     uniq_flow5 = int(features.get("uniq_flow5", 0) or 0)
     syn_ratio = safe_float(features.get("syn_ratio"))
     syn_only_ratio = safe_float(features.get("syn_only_ratio"))
+    cardinality_min_pps = safe_float(th.get("cardinality_min_pps", 120))
 
     def hit(name: str, cond: bool, detail: str):
         nonlocal score
@@ -278,8 +323,16 @@ def classify_rule(features: dict, rules: dict):
 
     hit("pps_high", pps > safe_float(th.get("pps_high")), f"pps={pps}")
     hit("bps_high", bps > safe_float(th.get("bps_high")), f"bps={bps}")
-    hit("uniq_src_high", uniq_src > int(th.get("uniq_src_high", 0)), f"uniq_src={uniq_src}")
-    hit("uniq_flow5_high", uniq_flow5 > int(th.get("uniq_flow5_high", 0)), f"uniq_flow5={uniq_flow5}")
+    hit(
+        "uniq_src_high",
+        pps >= cardinality_min_pps and uniq_src > int(th.get("uniq_src_high", 0)),
+        f"uniq_src={uniq_src}",
+    )
+    hit(
+        "uniq_flow5_high",
+        pps >= cardinality_min_pps and uniq_flow5 > int(th.get("uniq_flow5_high", 0)),
+        f"uniq_flow5={uniq_flow5}",
+    )
     hit("syn_ratio_high", syn_ratio > safe_float(th.get("syn_ratio_high")), f"syn_ratio={syn_ratio}")
     hit("syn_only_ratio_high", syn_only_ratio > safe_float(th.get("syn_only_ratio_high")), f"syn_only_ratio={syn_only_ratio}")
 
@@ -316,6 +369,7 @@ def build_fusion_engine(rules: dict, args) -> FusionEngine:
     decision = rules.get("decision", {}) or {}
     dl_attack = decision.get("dl_attack_score", decision.get("ml_attack_score", 0.7))
     dl_suspect = decision.get("dl_suspect_score", decision.get("ml_suspect_score", 0.5))
+    dl_type_confirm = decision.get("dl_type_confirm_min", decision.get("type_confirm_min", 0.6))
     rule_conf = decision.get("rule_confidence_min", 0.6)
     type_confirm_min = decision.get("type_confirm_min", 0.45)
     seq_len = decision.get("dl_seq_len", 10)
@@ -344,6 +398,7 @@ def build_fusion_engine(rules: dict, args) -> FusionEngine:
         seq_len=int(seq_len),
         dl_attack_score=float(dl_attack),
         dl_suspect_score=float(dl_suspect),
+        dl_type_confirm_min=float(dl_type_confirm),
         rule_confidence_min=float(rule_conf),
         type_confirm_min=float(type_confirm_min),
         known_rule_attacks=set(known),
@@ -356,6 +411,9 @@ def build_fusion_engine(rules: dict, args) -> FusionEngine:
         gate_streak=int(decision.get("gate_streak", 3)),
         gate_sample_every=int(decision.get("gate_sample_every", 10)),
         gate_cooldown_windows=int(decision.get("gate_cooldown_windows", 8)),
+        enable_low_risk_gate=bool(decision.get("enable_low_risk_gate", False)),
+        dl_error_as_suspect=bool(decision.get("dl_error_as_suspect", True)),
+        dl_warmup_pad=bool(decision.get("dl_warmup_pad", True)),
     )
     return FusionEngine(client, settings)
 
@@ -375,6 +433,7 @@ def main():
     ap.add_argument("--persist-benign", action="store_true", help="also persist benign rows to --jsonl")
     ap.add_argument("--emit-benign", action="store_true", help="also print benign rows to stdout")
     ap.add_argument("--fuse", action="store_true", help="enable rule-first + DL-fallback fusion")
+    ap.add_argument("--dl-only", action="store_true", help="validation mode: bypass rule decision and let DL decide")
     ap.add_argument("--dl-url", default="", help="DL service URL, e.g. http://127.0.0.1:8001/predict")
     ap.add_argument("--dl-timeout", type=float, default=None, help="DL request timeout (sec)")
     args = ap.parse_args()
@@ -392,9 +451,15 @@ def main():
         except Exception:
             continue
 
-        rule_out = classify_rule(features, rules)
+        raw_rule_out = classify_rule(features, rules)
+        rule_out = raw_rule_out
+        if args.dl_only:
+            raw_reasons = list(raw_rule_out[4] or [])
+            raw_reasons.append("override:dl_only")
+            rule_out = ("benign", "BENIGN", 0, 0.0, raw_reasons)
 
         label, attack_type, score, confidence, reasons = rule_out
+        rule_label, rule_attack_type, rule_score, rule_confidence, _ = raw_rule_out
         decision_source = "rules"
         final_label = label
         final_attack_type = attack_type
@@ -439,21 +504,22 @@ def main():
             "ts": time.time(),
             "label": label,
             "attack_type": attack_type,
-            "score": score,
-            "confidence": confidence,
+            "score": rule_score,
+            "confidence": rule_confidence,
             "reasons": reasons,
             "features": features,
             "decision_source": decision_source,
             "final_label": final_label,
             "final_attack_type": final_attack_type,
+            "dl_only_mode": bool(args.dl_only),
             "dl_p_attack": dl_p_attack,
             "dl_model_version": dl_model_version,
             "dl_error": dl_error,
             "dl_type_probs": dl_type_probs,
             "dl_extra_type": dl_extra_type,
             "dl_extra_confidence": dl_extra_confidence,
-            "rule_label": rule_out[0],
-            "rule_attack_type": rule_out[1],
+            "rule_label": rule_label,
+            "rule_attack_type": rule_attack_type,
         }
 
         is_alert = label in ("attack", "suspect")

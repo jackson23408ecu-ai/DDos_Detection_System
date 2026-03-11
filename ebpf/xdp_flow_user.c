@@ -39,7 +39,6 @@ static int libbpf_print_fn(enum libbpf_print_level level,
 {
     /* 只把 libbpf 的日志打到 stderr，避免污染 stdout 的 JSON */
     if (level == LIBBPF_DEBUG) {
-        /* 你不想看 debug 可以直接 return 0; */
         return vfprintf(stderr, format, args);
     }
     return vfprintf(stderr, format, args);

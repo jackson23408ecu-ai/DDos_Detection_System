@@ -1,11 +1,12 @@
 {
   "thresholds": {
-    "pps_high": 2000,
-    "bps_high": 5000000,
-    "uniq_src_high": 50,
-    "uniq_flow5_high": 200,
-    "syn_ratio_high": 0.6,
-    "syn_only_ratio_high": 0.3
+    "pps_high": 600,
+    "bps_high": 1500000,
+    "cardinality_min_pps": 120,
+    "uniq_src_high": 10,
+    "uniq_flow5_high": 80,
+    "syn_ratio_high": 0.45,
+    "syn_only_ratio_high": 0.15
   },
   "weights": {
     "pps_high": 3,
@@ -20,28 +21,41 @@
       "min_pps": 120,
       "min_tcp_cnt": 80,
       "min_syn_ratio": 0.55,
-      "min_syn_only_ratio": 0.25
+      "min_syn_only_ratio": 0.25,
+      "min_syn_pkts": 80,
+      "relaxed_syn_ratio": 0.3,
+      "relaxed_syn_only_ratio": 0.12
     },
     "tcp_ack_flood": {
       "enabled": true,
       "min_pps": 350,
+      "single_src_min_pps": 1500,
       "min_tcp_cnt": 250,
       "min_ack_ratio": 0.9,
+      "min_ack_only_ratio": 0.55,
       "max_syn_ratio": 0.08,
-      "min_uniq_src": 1,
-      "min_uniq_flow5": 1,
+      "max_syn_ack_ratio": 0.06,
+      "max_psh_ratio": 0.12,
+      "max_pktlen_mean": 120,
+      "min_uniq_src": 3,
+      "min_uniq_flow5": 12,
       "allow_ssh_dominant": false,
-      "max_ssh_dport_ratio": 0.2
+      "max_ssh_dport_ratio": 0.35
     },
     "tcp_rst_flood": {
       "enabled": true,
       "min_pps": 350,
+      "single_src_min_pps": 1500,
       "min_tcp_cnt": 250,
       "min_rst_ratio": 0.5,
-      "min_uniq_src": 1,
-      "min_uniq_flow5": 1,
+      "max_syn_ratio": 0.2,
+      "max_syn_ack_ratio": 0.08,
+      "max_psh_ratio": 0.12,
+      "max_pktlen_mean": 120,
+      "min_uniq_src": 3,
+      "min_uniq_flow5": 12,
       "allow_ssh_dominant": false,
-      "max_ssh_dport_ratio": 0.2
+      "max_ssh_dport_ratio": 0.35
     },
     "udp_flood": {
       "min_pps": 150,
@@ -98,21 +112,25 @@
     }
   },
   "decision": {
-    "suspect_score": 4,
-    "attack_score": 8,
-    "dl_suspect_score": 0.5,
-    "dl_attack_score": 0.7,
+    "suspect_score": 3,
+    "attack_score": 6,
+    "dl_suspect_score": 0.65,
+    "dl_attack_score": 0.82,
+    "dl_type_confirm_min": 0.6,
     "rule_confidence_min": 0.6,
-    "type_confirm_min": 0.45,
+    "type_confirm_min": 0.6,
     "gate_min_rule_score": 0.0,
-    "gate_low_pps": 400.0,
+    "gate_low_pps": 120.0,
     "gate_low_uniq_src": 3,
     "gate_low_uniq_flow5": 30,
     "gate_low_syn_ratio": 0.2,
     "gate_low_syn_only_ratio": 0.05,
-    "gate_streak": 1,
-    "gate_sample_every": 20,
+    "gate_streak": 2,
+    "gate_sample_every": 5,
     "gate_cooldown_windows": 8,
+    "enable_low_risk_gate": false,
+    "dl_error_as_suspect": true,
+    "dl_warmup_pad": true,
     "dl_seq_len": 10,
     "known_rule_attacks": [
       "UDP_FLOOD",

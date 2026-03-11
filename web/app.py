@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 import os, json, time, sqlite3
+from collections import defaultdict
 from pathlib import Path
 from flask import Flask, jsonify, request, Response, send_from_directory
 
@@ -73,6 +74,58 @@ def _row_get(row, key, default=None):
     return default
 
 
+def _normalize_attack_type(label: str, attack_type: str) -> str:
+    label = str(label or "").strip().lower()
+    attack_type = str(attack_type or "").strip().upper()
+    if label == "suspect":
+        return "SUSPECT"
+    if attack_type in ("", "ATTACK", "BENIGN"):
+        return "UNKNOWN"
+    return attack_type
+
+
+def _parse_pair_list(raw):
+    data = _safe_json_loads(raw, [])
+    if not isinstance(data, list):
+        return []
+    out = []
+    for item in data:
+        if not isinstance(item, (list, tuple)) or len(item) < 2:
+            continue
+        k = str(item[0]).strip()
+        if not k:
+            continue
+        try:
+            v = float(item[1] or 0.0)
+        except Exception:
+            v = 0.0
+        out.append((k, v))
+    return out
+
+
+def _merge_pairs(dst: dict, pairs):
+    for k, v in pairs:
+        dst[k] = float(dst.get(k, 0.0)) + float(v)
+
+
+def _top_pairs(src: dict, topn: int):
+    return [[k, round(v, 3)] for k, v in sorted(src.items(), key=lambda x: x[1], reverse=True)[:topn]]
+
+
+def _build_event_filters(table: str, label: str, attack_type: str):
+    where = []
+    params = []
+    if label:
+        where.append("COALESCE(final_label, label) = ?")
+        params.append(label)
+    if attack_type:
+        where.append("COALESCE(final_attack_type, attack_type) = ?")
+        params.append(attack_type)
+    if not where and table == "alerts":
+        where.append("COALESCE(final_label, label) IN ('attack','suspect')")
+    return where, params
+
+
 @app.get("/")
 def index():
     return send_from_directory("static", "index.html")
@@ -104,20 +157,11 @@ def api_events_db():
     label = request.args.get("label", "").strip()
     attack_type = request.args.get("attack_type", "").strip()
 
-    where = []
-    params = []
-    if label:
-        where.append("COALESCE(final_label, label) = ?")
-        params.append(label)
-    if attack_type:
-        where.append("COALESCE(final_attack_type, attack_type) = ?")
-        params.append(attack_type)
+    where, params = _build_event_filters(table, label, attack_type)
 
     sql = f"SELECT * FROM {table}"
     if where:
         sql += " WHERE " + " AND ".join(where)
-    elif table == "alerts":
-        sql += " WHERE COALESCE(final_label, label) IN ('attack','suspect')"
     sql += " ORDER BY ts DESC LIMIT ? OFFSET ?"
     params.extend([limit, offset])
 
@@ -154,6 +198,261 @@ def api_events_db():
             }
         )
 
+    return jsonify(out)
+
+
+@app.get("/api/events_segment")
+def api_events_segment():
+    path = Path(request.args.get("db", str(DEFAULT_DB)))
+    table = str(request.args.get("table", "alerts")).strip().lower()
+    if table not in ("events", "alerts"):
+        table = "alerts"
+    total_table = str(request.args.get("total_table", "events")).strip().lower()
+    if total_table not in ("events", "alerts"):
+        total_table = table
+    minutes = int(request.args.get("minutes", "60"))
+    bucket_sec = int(request.args.get("bucket_sec", "5"))
+    limit = int(request.args.get("limit", "300"))
+    topn = int(request.args.get("topn", "5"))
+    label = request.args.get("label", "").strip()
+    attack_type = request.args.get("attack_type", "").strip()
+    since_ts = time.time() - (minutes * 60)
+
+    where, params = _build_event_filters(table, label, attack_type)
+    sql = (
+        f"SELECT ts, label, attack_type, final_label, final_attack_type, decision_source, "
+        f"pps, bps, uniq_src, uniq_flow5, top_src_ip, top_dport, features "
+        f"FROM {table}"
+    )
+    if where:
+        sql += " WHERE " + " AND ".join(where) + " AND ts >= ?"
+    else:
+        sql += " WHERE ts >= ?"
+    params.append(since_ts)
+    sql += " ORDER BY ts ASC"
+
+    conn = get_db(path)
+    try:
+        try:
+            rows = conn.execute(sql, params).fetchall()
+        except sqlite3.OperationalError:
+            rows = []
+        try:
+            total_rows = conn.execute(
+                f"SELECT ts, features FROM {total_table} WHERE ts >= ? ORDER BY ts ASC",
+                (since_ts,),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            total_rows = []
+    finally:
+        conn.close()
+
+    total_pkt_by_bucket = defaultdict(float)
+    for r in total_rows:
+        ts = float(r["ts"] or 0.0)
+        bucket = int(ts // bucket_sec) * bucket_sec
+        features = _safe_json_loads(r["features"], {})
+        pkt_cnt = float((features.get("pkt_cnt", 0.0) if isinstance(features, dict) else 0.0) or 0.0)
+        total_pkt_by_bucket[bucket] += pkt_cnt
+
+    buckets = {}
+    for r in rows:
+        ts = float(r["ts"] or 0.0)
+        bucket = int(ts // bucket_sec) * bucket_sec
+        item = buckets.setdefault(
+            bucket,
+            {
+                "ts": bucket,
+                "bucket_start": bucket,
+                "bucket_end": bucket + bucket_sec,
+                "window_count": 0,
+                "alert_count": 0,
+                "attack_count": 0,
+                "suspect_count": 0,
+                "total_pkt_sum": 0.0,
+                "alert_pkt_sum": 0.0,
+                "pps_sum": 0.0,
+                "bps_sum": 0.0,
+                "pps_peak": 0.0,
+                "bps_peak": 0.0,
+                "uniq_src_max": 0,
+                "uniq_flow5_max": 0,
+                "uniq_src_sum": 0,
+                "type_cnt": defaultdict(int),
+                "source_cnt": defaultdict(int),
+                "top_src_map": {},
+                "top_dport_map": {},
+            },
+        )
+
+        item["window_count"] += 1
+        final_label = str(r["final_label"] or r["label"] or "").strip().lower()
+        final_attack_type = str(r["final_attack_type"] or r["attack_type"] or "UNKNOWN").strip()
+        normalized_type = _normalize_attack_type(final_label, final_attack_type)
+        decision_source = str(r["decision_source"] or "rules").strip().lower()
+        features = _safe_json_loads(r["features"], {})
+        pkt_cnt = float((features.get("pkt_cnt", 0.0) if isinstance(features, dict) else 0.0) or 0.0)
+        item["source_cnt"][decision_source] += 1
+        item["total_pkt_sum"] += pkt_cnt
+
+        if final_label in ("attack", "suspect"):
+            item["alert_count"] += 1
+            item["alert_pkt_sum"] += pkt_cnt
+        if final_label == "attack":
+            item["attack_count"] += 1
+        elif final_label == "suspect":
+            item["suspect_count"] += 1
+        item["type_cnt"][normalized_type] += 1
+
+        pps = float(r["pps"] or 0.0)
+        bps = float(r["bps"] or 0.0)
+        item["pps_sum"] += pps
+        item["bps_sum"] += bps
+        item["pps_peak"] = max(item["pps_peak"], pps)
+        item["bps_peak"] = max(item["bps_peak"], bps)
+        uniq_src_now = int(r["uniq_src"] or 0)
+        item["uniq_src_max"] = max(item["uniq_src_max"], uniq_src_now)
+        item["uniq_src_sum"] += max(0, uniq_src_now)
+        item["uniq_flow5_max"] = max(item["uniq_flow5_max"], int(r["uniq_flow5"] or 0))
+
+        src_pairs = _parse_pair_list(r["top_src_ip"])
+        dport_pairs = _parse_pair_list(r["top_dport"])
+        if not src_pairs or not dport_pairs:
+            if not src_pairs:
+                src_pairs = _parse_pair_list(json.dumps(features.get("top_src_ip", []), ensure_ascii=False))
+            if not dport_pairs:
+                dport_pairs = _parse_pair_list(json.dumps(features.get("top_dport", []), ensure_ascii=False))
+        _merge_pairs(item["top_src_map"], src_pairs)
+        _merge_pairs(item["top_dport_map"], dport_pairs)
+
+    out = []
+    for bucket in sorted(buckets.keys(), reverse=True)[: max(1, limit)]:
+        b = buckets[bucket]
+        type_sorted = sorted(b["type_cnt"].items(), key=lambda x: x[1], reverse=True)
+        source_sorted = sorted(b["source_cnt"].items(), key=lambda x: x[1], reverse=True)
+        main_type = type_sorted[0][0] if type_sorted else "UNKNOWN"
+        mixed = len([x for x in type_sorted if x[1] > 0]) > 1
+        out.append(
+            {
+                "ts": b["ts"],
+                "bucket_start": b["bucket_start"],
+                "bucket_end": b["bucket_end"],
+                "window_count": b["window_count"],
+                "alert_count": b["alert_count"],
+                "attack_count": b["attack_count"],
+                "suspect_count": b["suspect_count"],
+                "total_window_packets": int(round(total_pkt_by_bucket.get(bucket, b["total_pkt_sum"]))),
+                "alert_window_packets": int(round(b["alert_pkt_sum"])),
+                "main_attack_type": main_type,
+                "attack_type_mixed": mixed,
+                "attack_type_list": [x[0] for x in type_sorted],
+                "attack_type_breakdown": [[k, int(v)] for k, v in type_sorted],
+                "decision_source_breakdown": [[k, int(v)] for k, v in source_sorted],
+                "avg_pps": round((b["pps_sum"] / b["window_count"]) if b["window_count"] else 0.0, 3),
+                "peak_pps": round(b["pps_peak"], 3),
+                "avg_bps": round((b["bps_sum"] / b["window_count"]) if b["window_count"] else 0.0, 3),
+                "peak_bps": round(b["bps_peak"], 3),
+                "uniq_src_max": int(b["uniq_src_max"]),
+                "uniq_src_window_sum": int(b["uniq_src_sum"]),
+                "uniq_src_bucket_est": int(max(b["uniq_src_max"], len(b["top_src_map"]))),
+                "uniq_flow5_max": int(b["uniq_flow5_max"]),
+                "top_src_ip_agg": _top_pairs(b["top_src_map"], max(1, topn)),
+                "top_dport_agg": _top_pairs(b["top_dport_map"], max(1, topn)),
+            }
+        )
+    return jsonify(out)
+
+
+@app.get("/api/events_bucket_details")
+def api_events_bucket_details():
+    path = Path(request.args.get("db", str(DEFAULT_DB)))
+    table = str(request.args.get("table", "alerts")).strip().lower()
+    if table not in ("events", "alerts"):
+        table = "alerts"
+    try:
+        bucket_start = float(request.args.get("bucket_start", "0") or 0.0)
+    except (TypeError, ValueError):
+        bucket_start = 0.0
+    try:
+        bucket_sec = max(1, int(request.args.get("bucket_sec", "5")))
+    except (TypeError, ValueError):
+        bucket_sec = 5
+    try:
+        limit = max(1, min(int(request.args.get("limit", "200")), 1000))
+    except (TypeError, ValueError):
+        limit = 200
+    label = request.args.get("label", "").strip()
+    attack_type = request.args.get("attack_type", "").strip()
+    if bucket_start <= 0:
+        return jsonify([])
+
+    bucket_end = bucket_start + bucket_sec
+    where, params = _build_event_filters(table, label, attack_type)
+    sql = (
+        f"SELECT id, ts, label, attack_type, final_label, final_attack_type, decision_source, "
+        f"pps, bps, uniq_src, uniq_flow5, top_src_ip, top_dport, reasons, features "
+        f"FROM {table}"
+    )
+    if where:
+        sql += " WHERE " + " AND ".join(where) + " AND ts >= ? AND ts < ?"
+    else:
+        sql += " WHERE ts >= ? AND ts < ?"
+    params.extend([bucket_start, bucket_end, limit])
+    sql += " ORDER BY ts DESC LIMIT ?"
+
+    fallback_sql = (
+        f"SELECT id, ts, label, attack_type, "
+        f"pps, bps, uniq_src, uniq_flow5, top_src_ip, top_dport, reasons, features "
+        f"FROM {table}"
+    )
+    fallback_params = list(params)
+    if where:
+        fallback_sql += " WHERE " + " AND ".join(where) + " AND ts >= ? AND ts < ?"
+    else:
+        fallback_sql += " WHERE ts >= ? AND ts < ?"
+    fallback_sql += " ORDER BY ts DESC LIMIT ?"
+
+    conn = get_db(path)
+    try:
+        try:
+            rows = conn.execute(sql, params).fetchall()
+        except sqlite3.OperationalError:
+            try:
+                rows = conn.execute(fallback_sql, fallback_params).fetchall()
+            except sqlite3.OperationalError:
+                rows = []
+    finally:
+        conn.close()
+
+    out = []
+    for r in rows:
+        features = _safe_json_loads(_row_get(r, "features"), {})
+        reasons = _safe_json_loads(_row_get(r, "reasons"), [])
+        src_pairs = _parse_pair_list(_row_get(r, "top_src_ip"))
+        dport_pairs = _parse_pair_list(_row_get(r, "top_dport"))
+        if not src_pairs and isinstance(features, dict):
+            src_pairs = _parse_pair_list(json.dumps(features.get("top_src_ip", []), ensure_ascii=False))
+        if not dport_pairs and isinstance(features, dict):
+            dport_pairs = _parse_pair_list(json.dumps(features.get("top_dport", []), ensure_ascii=False))
+
+        out.append(
+            {
+                "id": _row_get(r, "id"),
+                "ts": _row_get(r, "ts"),
+                "label": _row_get(r, "label", ""),
+                "attack_type": _row_get(r, "attack_type", ""),
+                "final_label": _row_get(r, "final_label", _row_get(r, "label", "")),
+                "final_attack_type": _row_get(r, "final_attack_type", _row_get(r, "attack_type", "")),
+                "decision_source": _row_get(r, "decision_source", "rules"),
+                "pps": _row_get(r, "pps", 0.0),
+                "bps": _row_get(r, "bps", 0.0),
+                "uniq_src": _row_get(r, "uniq_src", 0),
+                "uniq_flow5": _row_get(r, "uniq_flow5", 0),
+                "top_src_ip": [[k, round(v, 3)] for k, v in src_pairs],
+                "top_dport": [[k, round(v, 3)] for k, v in dport_pairs],
+                "reasons": reasons if isinstance(reasons, list) else [],
+            }
+        )
     return jsonify(out)
 
 
@@ -206,7 +505,7 @@ def api_series():
                 "total": int(r["total"] or 0),
             }
         )
-    return jsonify(out)
+    return jsonify({"meta": {"minutes": minutes, "bucket_sec": bucket_sec, "y": "avg_per_window"}, "series": out})
 
 
 @app.get("/api/ddos_series")
@@ -278,7 +577,7 @@ def api_ddos_series():
 
     types = list(dict.fromkeys(known_types + sorted(observed_types)))
     series = [buckets[k] for k in sorted(buckets.keys())]
-    return jsonify({"types": types, "series": series})
+    return jsonify({"meta": {"minutes": minutes, "bucket_sec": bucket_sec, "y": "alert_windows_per_bucket"}, "types": types, "series": series})
 
 
 @app.get("/api/topk")
@@ -326,6 +625,85 @@ def api_topk():
         {
             "top_src_ip": [[k, v] for k, v in top_src],
             "top_dport": [[k, v] for k, v in top_dport],
+        }
+    )
+
+
+@app.get("/api/topk_segment")
+def api_topk_segment():
+    path = Path(request.args.get("db", str(DEFAULT_DB)))
+    minutes = int(request.args.get("minutes", "60"))
+    bucket_sec = int(request.args.get("bucket_sec", "5"))
+    topn = int(request.args.get("topn", "5"))
+    label = request.args.get("label", "").strip()
+    attack_type = request.args.get("attack_type", "").strip()
+    since_ts = time.time() - (minutes * 60)
+
+    where, params = _build_event_filters("alerts", label, attack_type)
+    sql = "SELECT ts, top_src_ip FROM alerts"
+    if where:
+        sql += " WHERE " + " AND ".join(where) + " AND ts >= ?"
+    else:
+        sql += " WHERE ts >= ?"
+    params.append(since_ts)
+    sql += " ORDER BY ts ASC"
+
+    conn = get_db(path)
+    try:
+        try:
+            rows = conn.execute(sql, params).fetchall()
+        except sqlite3.OperationalError:
+            rows = []
+    finally:
+        conn.close()
+
+    bucket_map = {}
+    global_total = defaultdict(float)
+    global_active = defaultdict(int)
+    for r in rows:
+        ts = float(r["ts"] or 0.0)
+        bucket = int(ts // bucket_sec) * bucket_sec
+        b = bucket_map.setdefault(bucket, {"ts": bucket, "top_src_map": {}})
+        pairs = _parse_pair_list(r["top_src_ip"])
+        if not pairs:
+            continue
+        active_ip = set()
+        for ip, cnt in pairs:
+            b["top_src_map"][ip] = float(b["top_src_map"].get(ip, 0.0)) + float(cnt)
+            global_total[ip] += float(cnt)
+            active_ip.add(ip)
+        for ip in active_ip:
+            global_active[ip] += 1
+
+    ranked = sorted(global_total.keys(), key=lambda ip: (global_active[ip], global_total[ip]), reverse=True)
+    selected = ranked[: max(1, topn)]
+
+    series = []
+    for bucket in sorted(bucket_map.keys()):
+        b = bucket_map[bucket]
+        selected_map = {}
+        other_sum = 0.0
+        for ip, cnt in b["top_src_map"].items():
+            if ip in selected:
+                selected_map[ip] = round(cnt, 3)
+            else:
+                other_sum += float(cnt)
+        series.append(
+            {
+                "ts": b["ts"],
+                "bucket_start": b["ts"],
+                "bucket_end": b["ts"] + bucket_sec,
+                "by_ip": selected_map,
+                "other": round(other_sum, 3),
+                "top_src_ip_agg": _top_pairs(b["top_src_map"], max(1, topn)),
+            }
+        )
+
+    return jsonify(
+        {
+            "meta": {"minutes": minutes, "bucket_sec": bucket_sec},
+            "ips": selected,
+            "series": series,
         }
     )
 
@@ -435,7 +813,7 @@ def api_ml_series():
     try:
         try:
             rows = conn.execute(
-                "SELECT ts, COALESCE(final_label, label) AS label, dl_p_attack, decision_source FROM alerts WHERE ts >= ? ORDER BY ts ASC",
+                "SELECT ts, COALESCE(final_label, label) AS label, dl_p_attack, confidence FROM alerts WHERE ts >= ? ORDER BY ts ASC",
                 (since_ts,),
             ).fetchall()
         except sqlite3.OperationalError:
@@ -447,20 +825,24 @@ def api_ml_series():
     for r in rows:
         ts = float(r["ts"] or 0)
         bucket = int(ts // bucket_sec) * bucket_sec
+        b = buckets.setdefault(bucket, {"dl_sum": 0.0, "dl_cnt": 0, "rule_sum": 0.0, "rule_cnt": 0, "alert": 0})
         dl_score = r["dl_p_attack"]
-        if dl_score is None:
-            continue
-        b = buckets.setdefault(bucket, {"sum": 0.0, "cnt": 0, "alert": 0})
-        b["sum"] += float(dl_score)
-        b["cnt"] += 1
+        if dl_score is not None:
+            b["dl_sum"] += float(dl_score)
+            b["dl_cnt"] += 1
+        rule_conf = r["confidence"]
+        if rule_conf is not None:
+            b["rule_sum"] += float(rule_conf)
+            b["rule_cnt"] += 1
         if (r["label"] or "") in ("suspect", "attack"):
             b["alert"] += 1
 
     out = []
     for bucket in sorted(buckets.keys()):
         b = buckets[bucket]
-        avg = b["sum"] / max(b["cnt"], 1)
-        out.append({"ts": bucket, "dl_p_attack": round(avg, 6), "alert_count": b["alert"]})
+        dl_avg = round(b["dl_sum"] / b["dl_cnt"], 6) if b["dl_cnt"] > 0 else None
+        rule_avg = round(b["rule_sum"] / b["rule_cnt"], 6) if b["rule_cnt"] > 0 else None
+        out.append({"ts": bucket, "dl_p_attack": dl_avg, "rule_confidence": rule_avg, "alert_count": b["alert"]})
     return jsonify(out)
 
 
@@ -530,5 +912,4 @@ def api_stream():
 init_feedback_table(DEFAULT_DB)
 
 if __name__ == "__main__":
-    # 0.0.0.0 方便你在宿主机访问（如果网络允许）
     app.run(host="0.0.0.0", port=5000, debug=True)

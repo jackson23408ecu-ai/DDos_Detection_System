@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from dl.dataset.feature_spec import FEATURE_ORDER, vectorize
+from dl.dataset.feature_spec import FEATURE_ORDER, enrich_temporal_features, vectorize
 
 
 BENIGN_LABELS = {
@@ -349,6 +349,7 @@ def main():
         )
         if not windows:
             continue
+        windows = enrich_temporal_features(windows)
         start = idx
         for feat in windows:
             X_list.append(vectorize(feat))

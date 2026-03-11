@@ -16,7 +16,6 @@ def safe_float(x, default=0.0):
 def classify(features: dict, rules: dict) -> tuple[str, str, int, float, list[str]]:
     """
     返回: (label, attack_type, score, confidence, reasons)
-    这里先做规则分数；attack_type 用最常见 DDoS 类型做一个“可扩展模板”
     """
     th = rules.get("thresholds", {})
     w  = rules.get("weights", {})
@@ -34,7 +33,6 @@ def classify(features: dict, rules: dict) -> tuple[str, str, int, float, list[st
     syn_ratio = safe_float(features.get("syn_ratio"))
     syn_only_ratio = safe_float(features.get("syn_only_ratio"))
 
-    # 命中规则加分（保持与你 rules.json 一致）
     def hit(name: str, cond: bool, detail: str):
         nonlocal score
         if cond:
@@ -55,11 +53,9 @@ def classify(features: dict, rules: dict) -> tuple[str, str, int, float, list[st
     else:
         label = "benign"
 
-    # 置信度：先做个简单归一化，后续你接深度学习再替换
     max_possible = sum(int(v) for v in w.values()) if w else 1
     confidence = min(1.0, score / max_possible)
 
-    # attack_type：先做最常见模板（你后续可以继续扩展更细）
     proto_cnt = features.get("proto_cnt", {}) or {}
     tcp_cnt = int(features.get("tcp_cnt", 0) or 0)
     udp_cnt = int(proto_cnt.get("17", proto_cnt.get(17, 0)) or 0)
@@ -73,7 +69,7 @@ def classify(features: dict, rules: dict) -> tuple[str, str, int, float, list[st
         # UDP Flood：UDP 占比高且 pps 高
         elif udp_cnt > 0 and udp_cnt >= tcp_cnt and pps > safe_float(th.get("pps_high", 0)):
             attack_type = "UDP_FLOOD"
-        # ICMP Flood：ICMP 占比高且 pps 高（如果你后续支持 ICMP 解析）
+        # ICMP Flood：ICMP 占比高且 pps 高
         elif icmp_cnt > 0 and pps > safe_float(th.get("pps_high", 0)):
             attack_type = "ICMP_FLOOD"
         else:
@@ -118,7 +114,6 @@ def main():
             "features": features
         }
 
-        # stdout 给你看实时结果
         print(json.dumps(out, ensure_ascii=False), flush=True)
 
         # 落盘

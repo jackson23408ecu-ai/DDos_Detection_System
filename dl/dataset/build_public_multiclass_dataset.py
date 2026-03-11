@@ -17,7 +17,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from dl.dataset.build_window_dataset import process_file
-from dl.dataset.feature_spec import FEATURE_ORDER, vectorize
+from dl.dataset.feature_spec import FEATURE_ORDER, enrich_temporal_features, vectorize
 
 
 def load_config(path: Path) -> dict:
@@ -104,6 +104,7 @@ def main():
         )
         if not windows:
             continue
+        windows = enrich_temporal_features(windows)
 
         start = idx
         local_labels = []

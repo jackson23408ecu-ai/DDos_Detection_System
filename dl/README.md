@@ -82,6 +82,8 @@ python3 dl/dataset/build_public_multiclass_dataset.py \
 python3 dl/train/train_seq_model.py --config dl/config.yaml
 ```
 
+注意：当前特征已包含时序滚动项（如 `pps_ma5/pps_ma10/pps_cv5`）。更新代码后请先重建 `dl/data` / `dl/data_public` 再训练，避免特征维度不一致。
+
 ## 4. 推理服务（FastAPI）
 
 启动服务：

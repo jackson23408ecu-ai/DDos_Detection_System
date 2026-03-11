@@ -216,7 +216,7 @@ class FlowWindowAgg:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--window", type=float, default=1.0, help="window size in seconds")
-    ap.add_argument("--topk", type=int, default=5, help="top-k items to output")
+    ap.add_argument("--topk", type=int, default=20, help="top-k items to output")
     ap.add_argument("--out", type=str, default="", help="optional output jsonl file path")
     args = ap.parse_args()
 
