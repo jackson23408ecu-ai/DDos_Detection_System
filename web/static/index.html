@@ -463,7 +463,7 @@
         <input id="bucketSec" type="number" min="1" max="120" value="5" style="width:90px;" />
       </label>
 
-      <span class="hint">说明: 告警=窗口级判定；主图Y轴=每桶告警窗口数</span>
+      <span class="hint">说明: 图表仍按窗口/时间桶统计；下方主表按攻击类型 + 连续时间聚合，展开后按主要源 IP 下钻</span>
     </div>
 
     <div class="grid">
@@ -533,28 +533,29 @@
 
       <div class="card tableCard" style="grid-column: span 12;">
         <div class="tableTop">
-          <strong>告警事件聚合表（每时间桶1条）</strong>
-          <span class="s">来源: SQLite alerts 表按 bucket_sec 聚合，最新在最上面</span>
+          <strong>攻击过程表（同攻击类型 + 时间连续合并）</strong>
+          <span class="s">来源: SQLite alerts 表派生，不改变原始检测判定；同一攻击类型内部的端口改为构成信息</span>
         </div>
         <div class="tableWrap">
           <table>
             <thead>
               <tr>
                 <th>#</th>
-                <th>时间段</th>
-                <th>告警数</th>
-                <th>全量包数/告警包数</th>
+                <th>开始 / 结束</th>
+                <th>持续</th>
+                <th>窗口数</th>
                 <th>attack/suspect</th>
                 <th>主类型</th>
                 <th>类型构成</th>
                 <th>peak/avg pps</th>
                 <th>peak/avg bps</th>
-                <th>uniq_src_max</th>
+                <th>估算包数</th>
+                <th>源 IP 估计数</th>
                 <th>uniq_flow5_max</th>
-                <th>top_src_ip_agg(top8)</th>
-                <th>top_dport_agg</th>
+                <th>主要源 IP(top)</th>
+                <th>端口构成</th>
                 <th class="reason-col">decision_source构成</th>
-                <th class="detail-col">明细</th>
+                <th class="detail-col">源 IP 下钻</th>
               </tr>
             </thead>
             <tbody id="tbody"></tbody>
@@ -608,9 +609,10 @@
     let audioCtx = null;
     let lastAlertTsSeen = 0;
     let latestSegments = [];
-    const bucketDetailCache = new Map();
-    const loadingBucketKeys = new Set();
-    const expandedBucketKeys = new Set();
+    let latestSessions = [];
+    const sessionDetailCache = new Map();
+    const loadingSessionKeys = new Set();
+    const expandedSessionKeys = new Set();
 
     function fmtTime(ts){
       if (!ts) return "-";
@@ -657,6 +659,14 @@
 
     function makeBucketKey(bucketStart, bucketSec){
       return `${Math.floor(num(bucketStart))}|${Math.max(1, parseInt(bucketSec || "5", 10))}`;
+    }
+
+    function makeSessionKey(session){
+      return [
+        Math.floor(num(session.start_ts, 0)),
+        Math.floor(num(session.end_ts, 0)),
+        String(session.attack_type ?? "UNKNOWN")
+      ].join("|");
     }
 
     function escapeHtml(v){
@@ -755,6 +765,36 @@
       if (attackType) params.append("attack_type", attackType);
       const resp = await fetch(`/api/events_segment?${params.toString()}`);
       if (!resp.ok) throw new Error("events_segment failed");
+      return resp.json();
+    }
+
+    async function loadAlertSessions(){
+      const params = new URLSearchParams({
+        table: "alerts",
+        limit: String(parseInt(maxRowsInput.value || "200", 10)),
+        minutes: String(parseInt(minutesInput.value || "60", 10)),
+        merge_gap_sec: "30",
+        topn: "20"
+      });
+      const label = labelFilter.value.trim();
+      const attackType = attackTypeFilter.value.trim();
+      if (label) params.append("label", label);
+      if (attackType) params.append("attack_type", attackType);
+      const resp = await fetch(`/api/alert_sessions?${params.toString()}`);
+      if (!resp.ok) throw new Error("alert_sessions failed");
+      return resp.json();
+    }
+
+    async function loadSessionSources(session){
+      const params = new URLSearchParams({
+        table: "alerts",
+        start_ts: String(num(session.start_ts, 0)),
+        end_ts: String(num(session.end_ts, 0)),
+        attack_type: String(session.attack_type ?? ""),
+        topn: "200"
+      });
+      const resp = await fetch(`/api/alert_session_sources?${params.toString()}`);
+      if (!resp.ok) throw new Error("alert_session_sources failed");
       return resp.json();
     }
 
@@ -891,28 +931,22 @@
       return items.slice(0, cap).map((it) => `${it[0]}:${((num(it[1]) / total) * 100).toFixed(0)}%`).join(" | ");
     }
 
-    function renderBucketDetailPanel(rows){
+    function renderSessionDetailPanel(rows){
       if (!Array.isArray(rows) || rows.length === 0){
-        return `<div class="detail-empty">该时间桶没有可展示的告警明细。</div>`;
+        return `<div class="detail-empty">该攻击过程下没有可展示的源 IP 明细。</div>`;
       }
       const htmlRows = rows.map((ev, idx) => {
-        const lbl = String(ev.final_label ?? ev.label ?? "").toLowerCase();
-        const tp = String(ev.final_attack_type ?? ev.attack_type ?? "UNKNOWN");
-        const src = formatTopList(ev.top_src_ip, 3);
-        const dport = formatTopList(ev.top_dport, 3);
-        const reasons = formatReasonItems(ev.reasons);
         return `
           <tr>
             <td class="mono">${idx + 1}</td>
-            <td class="mono">${fmtTime(ev.ts)}</td>
-            <td><span class="chip ${lbl === "attack" ? "attack" : "suspect"}">${escapeHtml(lbl || "unknown")}</span></td>
-            <td class="mono">${escapeHtml(tp)}</td>
-            <td class="mono">${formatRate(ev.pps)} / ${formatRate(ev.bps)}</td>
-            <td class="mono">${num(ev.uniq_src)} / ${num(ev.uniq_flow5)}</td>
-            <td class="mono">${escapeHtml(src)}</td>
-            <td class="mono">${escapeHtml(dport)}</td>
-            <td class="mono">${escapeHtml(ev.decision_source ?? "rules")}</td>
-            <td class="mono" style="white-space:normal;max-width:420px;">${reasons}</td>
+            <td class="mono">${escapeHtml(ev.src_ip ?? "-")}</td>
+            <td class="mono">${fmtTime(ev.first_ts)}</td>
+            <td class="mono">${fmtTime(ev.last_ts)}</td>
+            <td class="mono">${formatAge(ev.duration_sec)}</td>
+            <td class="mono">${num(ev.window_hits)}</td>
+            <td class="mono">${formatRate(ev.packet_est)}</td>
+            <td class="mono">${num(ev.share_pct).toFixed(2)}%</td>
+            <td class="mono">${formatRate(ev.max_window_packets)}</td>
           </tr>
         `;
       }).join("");
@@ -923,15 +957,14 @@
             <thead>
               <tr>
                 <th>#</th>
-                <th>时间</th>
-                <th>label</th>
-                <th>type</th>
-                <th>pps / bps</th>
-                <th>uniq_src / flow5</th>
-                <th>top_src_ip</th>
-                <th>top_dport</th>
-                <th>source</th>
-                <th>reasons</th>
+                <th>源 IP</th>
+                <th>首次出现</th>
+                <th>最后出现</th>
+                <th>持续</th>
+                <th>命中窗口</th>
+                <th>估算包数</th>
+                <th>贡献占比</th>
+                <th>单窗峰值</th>
               </tr>
             </thead>
             <tbody>${htmlRows}</tbody>
@@ -940,50 +973,40 @@
       `;
     }
 
-    function renderTable(segments){
+    function renderTable(sessions){
       tbody.innerHTML = "";
       let idx = 0;
-      const bucketSec = Math.max(1, parseInt(bucketSecInput.value || "5", 10));
-      for (const seg of segments){
+      for (const seg of sessions){
         idx += 1;
-        const cls = num(seg.attack_count) > 0 ? "attack" : "suspect";
-        const mixed = seg.attack_type_mixed ? " (mixed)" : "";
-        const uniqSrcMax = num(seg.uniq_src_max);
-        const uniqSrcWinSum = num(seg.uniq_src_window_sum, uniqSrcMax);
+        const cls = String(seg.final_label ?? "").toLowerCase() === "attack" ? "attack" : "suspect";
         const srcListText = formatTopList(seg.top_src_ip_agg, 8);
-        const detailCount = num(seg.alert_count);
-        const key = makeBucketKey(seg.bucket_start, bucketSec);
-        const expanded = expandedBucketKeys.has(key);
-        const loading = loadingBucketKeys.has(key);
-        const hasMultiAlerts = detailCount > 1;
-        let detailCell = `<span class="mono">-</span>`;
-        if (hasMultiAlerts){
-          detailCell = `
-            <button
-              class="detail-btn bucket-toggle"
-              data-key="${escapeHtml(key)}"
-              data-bucket-start="${num(seg.bucket_start)}"
-              data-bucket-sec="${bucketSec}"
-              ${loading ? "disabled" : ""}
-            >
-              ${loading ? "加载中..." : `${expanded ? "收起" : "查看"} ${detailCount} 条`}
-            </button>
-          `;
-        }
+        const key = makeSessionKey(seg);
+        const expanded = expandedSessionKeys.has(key);
+        const loading = loadingSessionKeys.has(key);
+        const detailCell = `
+          <button
+            class="detail-btn session-toggle"
+            data-session-key="${escapeHtml(key)}"
+            ${loading ? "disabled" : ""}
+          >
+            ${loading ? "加载中..." : `${expanded ? "收起" : "查看明细"}`}
+          </button>
+        `;
 
         const tr = document.createElement("tr");
         tr.className = cls;
         tr.innerHTML = `
           <td class="mono">${idx}</td>
-          <td>${fmtTimeRange(seg.bucket_start, seg.bucket_end)}</td>
-          <td class="mono">${num(seg.alert_count)}</td>
-          <td class="mono">${formatRate(seg.total_window_packets)} / ${formatRate(seg.alert_window_packets)}</td>
+          <td class="mono">${fmtTime(seg.start_ts)}<br>${fmtTime(seg.end_ts)}</td>
+          <td class="mono">${formatAge(seg.duration_sec)}</td>
+          <td class="mono">${num(seg.window_count)}</td>
           <td class="mono">${num(seg.attack_count)} / ${num(seg.suspect_count)}</td>
-          <td class="mono">${seg.main_attack_type ?? "UNKNOWN"}${mixed}</td>
+          <td class="mono">${seg.main_attack_type ?? seg.attack_type ?? "UNKNOWN"}</td>
           <td class="mono" style="white-space:normal;max-width:260px;">${formatBreakdown(seg.attack_type_breakdown, 4)}</td>
           <td class="mono">${formatRate(seg.peak_pps)} / ${formatRate(seg.avg_pps)}</td>
           <td class="mono">${formatRate(seg.peak_bps)} / ${formatRate(seg.avg_bps)}</td>
-          <td class="mono" title="window_sum:${uniqSrcWinSum}">${uniqSrcMax}</td>
+          <td class="mono">${formatRate(seg.packet_est)}</td>
+          <td class="mono">${num(seg.source_ip_count)}</td>
           <td class="mono">${num(seg.uniq_flow5_max)}</td>
           <td class="mono" style="white-space:normal;max-width:380px;">${srcListText}</td>
           <td class="mono" style="white-space:normal;max-width:240px;">${formatTopList(seg.top_dport_agg, 4)}</td>
@@ -995,10 +1018,10 @@
         if (expanded){
           const detailTr = document.createElement("tr");
           detailTr.className = "bucket-detail-row";
-          const details = bucketDetailCache.get(key);
+          const details = sessionDetailCache.get(key);
           detailTr.innerHTML = `
-            <td colspan="15">
-              ${loading ? `<div class="detail-empty">正在加载该时间桶明细...</div>` : renderBucketDetailPanel(details)}
+            <td colspan="16">
+              ${loading ? `<div class="detail-empty">正在加载该攻击过程的源 IP 明细...</div>` : renderSessionDetailPanel(details)}
             </td>
           `;
           tbody.appendChild(detailTr);
@@ -1007,33 +1030,33 @@
     }
 
     function clearBucketDetailState(){
-      bucketDetailCache.clear();
-      loadingBucketKeys.clear();
-      expandedBucketKeys.clear();
+      sessionDetailCache.clear();
+      loadingSessionKeys.clear();
+      expandedSessionKeys.clear();
     }
 
-    async function toggleBucketDetail(bucketStart, bucketSec){
-      const key = makeBucketKey(bucketStart, bucketSec);
-      if (expandedBucketKeys.has(key)){
-        expandedBucketKeys.delete(key);
-        renderTable(latestSegments);
+    async function toggleSessionDetail(session){
+      const key = makeSessionKey(session);
+      if (expandedSessionKeys.has(key)){
+        expandedSessionKeys.delete(key);
+        renderTable(latestSessions);
         return;
       }
 
-      expandedBucketKeys.add(key);
-      if (!bucketDetailCache.has(key) && !loadingBucketKeys.has(key)){
-        loadingBucketKeys.add(key);
-        renderTable(latestSegments);
+      expandedSessionKeys.add(key);
+      if (!sessionDetailCache.has(key) && !loadingSessionKeys.has(key)){
+        loadingSessionKeys.add(key);
+        renderTable(latestSessions);
         try {
-          const detailRows = await loadBucketDetails(bucketStart, bucketSec);
-          bucketDetailCache.set(key, Array.isArray(detailRows) ? detailRows : []);
+          const detailRows = await loadSessionSources(session);
+          sessionDetailCache.set(key, Array.isArray(detailRows) ? detailRows : []);
         } catch (err) {
-          bucketDetailCache.set(key, []);
+          sessionDetailCache.set(key, []);
         } finally {
-          loadingBucketKeys.delete(key);
+          loadingSessionKeys.delete(key);
         }
       }
-      renderTable(latestSegments);
+      renderTable(latestSessions);
     }
 
     function updateOpsCards(segments, dbs){
@@ -1247,9 +1270,10 @@
 
     async function refresh(){
       try {
-        const [events, segments, ddos, traffic, ml, agree, topk, topkSeg, dbs] = await Promise.all([
+        const [events, segments, sessions, ddos, traffic, ml, agree, topk, topkSeg, dbs] = await Promise.all([
           loadEvents(),
           loadEventsSegment(),
+          loadAlertSessions(),
           loadDdosSeries(),
           loadSeries(),
           loadMlSeries(),
@@ -1260,17 +1284,17 @@
         ]);
 
         latestSegments = Array.isArray(segments) ? segments : [];
-        const bucketSec = Math.max(1, parseInt(bucketSecInput.value || "5", 10));
-        const currentKeys = new Set(latestSegments.map((seg) => makeBucketKey(seg.bucket_start, bucketSec)));
-        for (const key of Array.from(expandedBucketKeys)){
-          if (!currentKeys.has(key)) expandedBucketKeys.delete(key);
+        latestSessions = Array.isArray(sessions) ? sessions : [];
+        const currentKeys = new Set(latestSessions.map((seg) => makeSessionKey(seg)));
+        for (const key of Array.from(expandedSessionKeys)){
+          if (!currentKeys.has(key)) expandedSessionKeys.delete(key);
         }
-        for (const key of Array.from(loadingBucketKeys)){
-          if (!currentKeys.has(key)) loadingBucketKeys.delete(key);
+        for (const key of Array.from(loadingSessionKeys)){
+          if (!currentKeys.has(key)) loadingSessionKeys.delete(key);
         }
 
         updateSummary(events);
-        renderTable(latestSegments);
+        renderTable(latestSessions);
         renderDdos(ddos);
         renderAttackPie(events);
         renderTraffic(traffic);
@@ -1292,12 +1316,13 @@
     }
 
     tbody.addEventListener("click", async (e) => {
-      const btn = e.target.closest(".bucket-toggle");
+      const btn = e.target.closest(".session-toggle");
       if (!btn) return;
-      const bucketStart = num(btn.dataset.bucketStart, 0);
-      const bucketSec = Math.max(1, parseInt(btn.dataset.bucketSec || bucketSecInput.value || "5", 10));
-      if (bucketStart <= 0) return;
-      await toggleBucketDetail(bucketStart, bucketSec);
+      const sessionKey = String(btn.dataset.sessionKey || "");
+      if (!sessionKey) return;
+      const session = latestSessions.find((it) => makeSessionKey(it) === sessionKey);
+      if (!session) return;
+      await toggleSessionDetail(session);
     });
 
     document.getElementById("btnRefresh").addEventListener("click", refresh);

@@ -21,7 +21,7 @@ for arg in "$@"; do
       ;;
     --help|-h)
       echo "Usage: bash scripts/run_pipeline.sh [iface] [--ml] [--write-events] [--dl-only]"
-      echo "Env: FEATURE_TOPK=50 (top source/port items kept per window)"
+      echo "Env: FEATURE_TOPK=200 (top source/port items kept per window)"
       exit 0
       ;;
     --*)
@@ -42,7 +42,7 @@ DL_URL="${DL_URL:-http://127.0.0.1:8001/predict}"
 RULES="${ROOT_DIR}/rule/rules.json"
 EVENTS="${ROOT_DIR}/logs/events.jsonl"
 ALERTS="${ROOT_DIR}/logs/alerts.jsonl"
-FEATURE_TOPK="${FEATURE_TOPK:-50}"
+FEATURE_TOPK="${FEATURE_TOPK:-200}"
 FUSION_EXTRA_ARGS=()
 if [[ "${DL_ONLY}" == "1" ]]; then
   FUSION_EXTRA_ARGS+=(--dl-only)

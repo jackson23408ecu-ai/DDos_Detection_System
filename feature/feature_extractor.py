@@ -6,7 +6,31 @@ import json
 import time
 import math
 import argparse
-from collections import defaultdict, Counter
+from collections import Counter
+from typing import Optional
+
+UDP_AMP_PORTS = {
+    53: "udp_dns",
+    123: "udp_ntp",
+    161: "udp_snmp",
+    389: "udp_cldap",
+    1900: "udp_ssdp",
+    11211: "udp_memcached",
+}
+
+CHANNEL_ORDER = [
+    "tcp_syn",
+    "tcp_ack",
+    "tcp_rst",
+    "udp_generic",
+    "udp_dns",
+    "udp_ntp",
+    "udp_ssdp",
+    "udp_cldap",
+    "udp_memcached",
+    "udp_snmp",
+    "icmp",
+]
 
 def safe_json_loads(line: str):
     line = line.strip()
@@ -213,6 +237,68 @@ class FlowWindowAgg:
             "top_dport": top_dport,     # [[80, 500], [22, 100], ...]
         }
 
+
+def classify_channel(e: dict) -> Optional[str]:
+    proto = int(e.get("proto", 0) or 0)
+    flags = int(e.get("tcp_flags", 0) or 0)
+    dport = int(e.get("dport", 0) or 0)
+
+    if proto == 6:
+        syn = bool(flags & 0x02)
+        ack = bool(flags & 0x10)
+        rst = bool(flags & 0x04)
+        if syn and (not ack) and (not rst):
+            return "tcp_syn"
+        if ack and (not syn) and (not rst):
+            return "tcp_ack"
+        if rst:
+            return "tcp_rst"
+        return None
+
+    if proto == 17:
+        return UDP_AMP_PORTS.get(dport, "udp_generic")
+
+    if proto == 1:
+        return "icmp"
+
+    return None
+
+
+def channel_meta(channel: str) -> dict:
+    if channel.startswith("tcp_"):
+        proto = 6
+        family = "tcp"
+    elif channel.startswith("udp_"):
+        proto = 17
+        family = "udp"
+    elif channel == "icmp":
+        proto = 1
+        family = "icmp"
+    else:
+        proto = 0
+        family = "other"
+
+    return {
+        "split_scope": "channel",
+        "split_channel": channel,
+        "split_family": family,
+        "split_proto": proto,
+    }
+
+
+def global_meta() -> dict:
+    return {
+        "split_scope": "global",
+        "split_channel": "global",
+        "split_family": "all",
+        "split_proto": 0,
+    }
+
+
+def sort_channels(channels):
+    order = {name: idx for idx, name in enumerate(CHANNEL_ORDER)}
+    return sorted(channels, key=lambda name: (order.get(name, len(order)), name))
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--window", type=float, default=1.0, help="window size in seconds")
@@ -223,7 +309,8 @@ def main():
     window_ns = int(args.window * 1e9)
     out_path = args.out.strip()
 
-    agg = FlowWindowAgg(topk=args.topk)
+    global_agg = FlowWindowAgg(topk=args.topk)
+    aggs = {}
 
     win_start = None
     win_end = None
@@ -234,6 +321,19 @@ def main():
         if out_path:
             with open(out_path, "a", encoding="utf-8") as f:
                 f.write(s + "\n")
+
+    def emit_window(start_ns: int, end_ns: int):
+        if global_agg.pkt_cnt > 0:
+            obj = global_agg.summarize(start_ns, end_ns)
+            obj.update(global_meta())
+            emit(obj)
+        for channel in sort_channels(aggs.keys()):
+            agg = aggs.get(channel)
+            if not agg or agg.pkt_cnt <= 0:
+                continue
+            obj = agg.summarize(start_ns, end_ns)
+            obj.update(channel_meta(channel))
+            emit(obj)
 
     for line in sys.stdin:
         e = safe_json_loads(line)
@@ -251,16 +351,25 @@ def main():
             win_end = win_start + window_ns
 
         while ts_ns >= win_end:
-            emit(agg.summarize(win_start, win_end))
-            agg.reset()
+            emit_window(win_start, win_end)
+            global_agg = FlowWindowAgg(topk=args.topk)
+            aggs = {}
             win_start = win_end
             win_end = win_start + window_ns
 
+        global_agg.update(e)
+        channel = classify_channel(e)
+        if channel is None:
+            continue
+        agg = aggs.get(channel)
+        if agg is None:
+            agg = FlowWindowAgg(topk=args.topk)
+            aggs[channel] = agg
         agg.update(e)
 
     # stdin结束，输出最后一个窗口（可选）
     if win_start is not None:
-        emit(agg.summarize(win_start, win_end))
+        emit_window(win_start, win_end)
 
 if __name__ == "__main__":
     main()

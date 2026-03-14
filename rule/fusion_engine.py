@@ -418,6 +418,27 @@ def build_fusion_engine(rules: dict, args) -> FusionEngine:
     return FusionEngine(client, settings)
 
 
+def known_rule_attacks(rules: dict) -> set:
+    decision = rules.get("decision", {}) or {}
+    known = decision.get(
+        "known_rule_attacks",
+        [
+            "UDP_FLOOD",
+            "TCP_SYN_FLOOD",
+            "ICMP_FLOOD",
+            "TCP_ACK_FLOOD",
+            "TCP_RST_FLOOD",
+            "DNS_AMP_FLOOD",
+            "NTP_AMP_FLOOD",
+            "SSDP_AMP_FLOOD",
+            "CLDAP_AMP_FLOOD",
+            "MEMCACHED_AMP_FLOOD",
+            "SNMP_AMP_FLOOD",
+        ],
+    )
+    return {str(x or "").strip().upper() for x in known if str(x or "").strip()}
+
+
 def write_jsonl(path: str, obj: dict):
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     with open(path, "a", encoding="utf-8") as f:
@@ -439,8 +460,9 @@ def main():
     args = ap.parse_args()
 
     rules = load_rules(args.rules_json)
+    typed_attacks = known_rule_attacks(rules)
 
-    fusion_engine = build_fusion_engine(rules, args) if args.fuse else None
+    global_fusion_engine = build_fusion_engine(rules, args) if args.fuse else None
 
     for line in sys.stdin:
         line = line.strip()
@@ -453,6 +475,22 @@ def main():
 
         raw_rule_out = classify_rule(features, rules)
         rule_out = raw_rule_out
+        split_scope = str(features.get("split_scope", "global") or "global").strip().lower()
+
+        # Channel windows are used only for known typed attacks. Suppress generic
+        # attack/suspect outcomes here and leave ambiguous traffic to the global path.
+        if split_scope == "channel":
+            raw_label, raw_attack_type, _, _, raw_reasons = raw_rule_out
+            raw_attack_type = str(raw_attack_type or "").strip().upper()
+            keep_channel_alert = raw_label == "attack" and raw_attack_type in typed_attacks
+            if not keep_channel_alert:
+                channel_reasons = list(raw_reasons or [])
+                if raw_label in ("attack", "suspect"):
+                    channel_reasons.append("channel_generic_suppressed:true")
+                    channel_reasons.append(f"channel_raw_label:{raw_label}")
+                    channel_reasons.append(f"channel_raw_attack_type:{raw_attack_type or 'BENIGN'}")
+                rule_out = ("benign", "BENIGN", 0, 0.0, channel_reasons)
+
         if args.dl_only:
             raw_reasons = list(raw_rule_out[4] or [])
             raw_reasons.append("override:dl_only")
@@ -470,8 +508,10 @@ def main():
         dl_extra_type = None
         dl_extra_confidence = None
 
-        if fusion_engine is not None:
-            fusion = fusion_engine.update(features, rule_out)
+        run_dl_fusion = split_scope == "global"
+
+        if global_fusion_engine is not None and run_dl_fusion:
+            fusion = global_fusion_engine.update(features, rule_out)
             final_label = fusion.final_label
             final_attack_type = fusion.final_attack_type
             decision_source = fusion.decision_source
@@ -497,6 +537,9 @@ def main():
                 reasons.append(f"dl_extra_confidence:{conf_txt}")
             if dl_error:
                 reasons.append(f"dl_error:{dl_error}")
+        else:
+            reasons = list(reasons)
+            reasons.append(f"decision_source:{decision_source}")
         label = final_label
         attack_type = final_attack_type
 

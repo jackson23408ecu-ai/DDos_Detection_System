@@ -112,6 +112,279 @@ def _top_pairs(src: dict, topn: int):
     return [[k, round(v, 3)] for k, v in sorted(src.items(), key=lambda x: x[1], reverse=True)[:topn]]
 
 
+def _known_rule_attacks() -> set:
+    default = {
+        "UDP_FLOOD",
+        "TCP_SYN_FLOOD",
+        "ICMP_FLOOD",
+        "TCP_ACK_FLOOD",
+        "TCP_RST_FLOOD",
+        "DNS_AMP_FLOOD",
+        "NTP_AMP_FLOOD",
+        "SSDP_AMP_FLOOD",
+        "CLDAP_AMP_FLOOD",
+        "MEMCACHED_AMP_FLOOD",
+        "SNMP_AMP_FLOOD",
+    }
+    if not RULES_JSON.exists():
+        return default
+    try:
+        with open(RULES_JSON, "r", encoding="utf-8") as f:
+            rules = json.load(f) or {}
+        known = (rules.get("decision", {}) or {}).get("known_rule_attacks", [])
+        out = {str(x).strip().upper() for x in known if str(x).strip()}
+        return out or default
+    except Exception:
+        return default
+
+
+def _safe_int(x, default=0):
+    try:
+        return int(x)
+    except Exception:
+        return int(default)
+
+
+def _safe_float_num(x, default=0.0):
+    try:
+        return float(x)
+    except Exception:
+        return float(default)
+
+
+def _first_feature_pair(features: dict, key: str, fallback="UNKNOWN"):
+    if not isinstance(features, dict):
+        return str(fallback)
+    items = features.get(key, []) or []
+    if not isinstance(items, list) or not items:
+        return str(fallback)
+    item = items[0]
+    if not isinstance(item, (list, tuple)) or len(item) < 1:
+        return str(fallback)
+    return str(item[0])
+
+
+def _normalize_session_attack_type(label: str, attack_type: str) -> str:
+    label = str(label or "").strip().lower()
+    attack_type = str(attack_type or "").strip().upper()
+    if label == "suspect":
+        return "SUSPECT"
+    if attack_type in ("", "ATTACK", "BENIGN"):
+        return "UNKNOWN"
+    return attack_type
+
+
+def _row_target_signature(row, features: dict):
+    dst_ip = _first_feature_pair(features, "top_dst_ip", "")
+    if not dst_ip:
+        dst_ip = "UNKNOWN_DST"
+    dport = _first_feature_pair(features, "top_dport", "")
+    if not dport:
+        dport = "UNKNOWN_PORT"
+    return str(dst_ip), str(dport)
+
+
+def _row_source_pairs(row, features: dict):
+    src_pairs = _parse_pair_list(_row_get(row, "top_src_ip"))
+    if src_pairs:
+        return src_pairs
+    return _parse_pair_list(json.dumps((features or {}).get("top_src_ip", []), ensure_ascii=False))
+
+
+def _row_dport_pairs(row, features: dict):
+    dport_pairs = _parse_pair_list(_row_get(row, "top_dport"))
+    if dport_pairs:
+        return dport_pairs
+    return _parse_pair_list(json.dumps((features or {}).get("top_dport", []), ensure_ascii=False))
+
+
+def _selected_alert_rows(rows):
+    known_attacks = _known_rule_attacks()
+    channel_hits = set()
+    normalized = []
+
+    for row in rows:
+        features = _safe_json_loads(_row_get(row, "features"), {})
+        split_scope = str((features or {}).get("split_scope", "global") or "global").strip().lower()
+        label = str(_row_get(row, "final_label", _row_get(row, "label", "")) or "").strip().lower()
+        attack_type = _normalize_session_attack_type(label, _row_get(row, "final_attack_type", _row_get(row, "attack_type", "")))
+        window_start = _safe_int((features or {}).get("window_start_ns", 0), 0)
+        item = (row, features, split_scope, label, attack_type, window_start)
+        normalized.append(item)
+        if split_scope == "channel" and label == "attack" and attack_type in known_attacks and window_start > 0:
+            channel_hits.add((window_start, attack_type))
+
+    out = []
+    for row, features, split_scope, label, attack_type, window_start in normalized:
+        if (
+            split_scope == "global"
+            and label == "attack"
+            and attack_type in known_attacks
+            and window_start > 0
+            and (window_start, attack_type) in channel_hits
+        ):
+            continue
+        out.append((row, features, split_scope, label, attack_type))
+    return out
+
+
+def _build_session_summary(session: dict, topn: int = 8):
+    window_count = max(1, int(session.get("window_count", 0) or 0))
+    type_sorted = sorted((session.get("type_cnt") or {}).items(), key=lambda x: x[1], reverse=True)
+    source_sorted = sorted((session.get("decision_source_cnt") or {}).items(), key=lambda x: x[1], reverse=True)
+    main_type = type_sorted[0][0] if type_sorted else str(session.get("attack_type", "UNKNOWN"))
+    source_rows = []
+    for ip, meta in sorted(
+        (session.get("source_map") or {}).items(),
+        key=lambda x: (float(x[1].get("packet_est", 0.0)), float(x[1].get("window_hits", 0))),
+        reverse=True,
+    ):
+        packet_est = float(meta.get("packet_est", 0.0) or 0.0)
+        source_rows.append(
+            {
+                "src_ip": ip,
+                "first_ts": float(meta.get("first_ts", 0.0) or 0.0),
+                "last_ts": float(meta.get("last_ts", 0.0) or 0.0),
+                "duration_sec": round(
+                    max(0.0, float(meta.get("last_ts", 0.0) or 0.0) - float(meta.get("first_ts", 0.0) or 0.0)),
+                    3,
+                ),
+                "window_hits": int(meta.get("window_hits", 0) or 0),
+                "packet_est": int(round(packet_est)),
+                "share_pct": round((packet_est / max(float(session.get("packet_est", 0.0) or 0.0), 1.0)) * 100.0, 2),
+                "max_window_packets": int(round(float(meta.get("max_window_packets", 0.0) or 0.0))),
+            }
+        )
+
+    return {
+        "final_label": str(session.get("final_label", "suspect")),
+        "attack_type": str(main_type),
+        "main_attack_type": str(main_type),
+        "start_ts": float(session.get("start_ts", 0.0) or 0.0),
+        "end_ts": float(session.get("end_ts", 0.0) or 0.0),
+        "duration_sec": round(
+            max(0.0, float(session.get("end_ts", 0.0) or 0.0) - float(session.get("start_ts", 0.0) or 0.0)),
+            3,
+        ),
+        "window_count": window_count,
+        "attack_count": int(session.get("attack_count", 0) or 0),
+        "suspect_count": int(session.get("suspect_count", 0) or 0),
+        "avg_pps": round(float(session.get("pps_sum", 0.0) or 0.0) / window_count, 3),
+        "peak_pps": round(float(session.get("pps_peak", 0.0) or 0.0), 3),
+        "avg_bps": round(float(session.get("bps_sum", 0.0) or 0.0) / window_count, 3),
+        "peak_bps": round(float(session.get("bps_peak", 0.0) or 0.0), 3),
+        "uniq_src_max": int(session.get("uniq_src_max", 0) or 0),
+        "uniq_flow5_max": int(session.get("uniq_flow5_max", 0) or 0),
+        "source_ip_count": int(max(len(session.get("source_map") or {}), int(session.get("uniq_src_max", 0) or 0))),
+        "packet_est": int(round(float(session.get("packet_est", 0.0) or 0.0))),
+        "decision_source_breakdown": [[k, int(v)] for k, v in source_sorted],
+        "attack_type_breakdown": [[k, int(v)] for k, v in type_sorted],
+        "top_src_ip_agg": _top_pairs(session.get("top_src_map", {}) or {}, max(1, topn)),
+        "top_dport_agg": _top_pairs(session.get("top_dport_map", {}) or {}, max(1, topn)),
+        "source_details": source_rows,
+    }
+
+
+def _build_alert_sessions(rows, merge_gap_sec: float, topn: int = 8):
+    merge_gap_sec = max(1.0, float(merge_gap_sec or 30.0))
+    sessions = []
+    last_session_by_key = {}
+
+    for row, features, split_scope, label, attack_type in _selected_alert_rows(rows):
+        ts = _safe_float_num(_row_get(row, "ts"), 0.0)
+        if ts <= 0:
+            continue
+        if label not in ("attack", "suspect"):
+            continue
+        # Aggregate a continuous attack process by attack type only.
+        # dport remains as a breakdown dimension instead of a split key.
+        session_key = (attack_type,)
+
+        session = last_session_by_key.get(session_key)
+        if session is None or (ts - float(session.get("end_ts", 0.0) or 0.0)) > merge_gap_sec:
+            session = {
+                "key": session_key,
+                "final_label": label,
+                "attack_type": attack_type,
+                "start_ts": ts,
+                "end_ts": ts,
+                "window_count": 0,
+                "attack_count": 0,
+                "suspect_count": 0,
+                "pps_sum": 0.0,
+                "bps_sum": 0.0,
+                "pps_peak": 0.0,
+                "bps_peak": 0.0,
+                "packet_est": 0.0,
+                "uniq_src_max": 0,
+                "uniq_flow5_max": 0,
+                "type_cnt": defaultdict(int),
+                "decision_source_cnt": defaultdict(int),
+                "top_src_map": {},
+                "top_dport_map": {},
+                "source_map": {},
+            }
+            sessions.append(session)
+            last_session_by_key[session_key] = session
+
+        session["end_ts"] = ts
+        session["window_count"] += 1
+        if label == "attack":
+            session["attack_count"] += 1
+            session["final_label"] = "attack"
+        else:
+            session["suspect_count"] += 1
+
+        decision_source = str(_row_get(row, "decision_source", "rules") or "rules").strip().lower()
+        session["decision_source_cnt"][decision_source] += 1
+        session["type_cnt"][attack_type] += 1
+
+        pps = _safe_float_num(_row_get(row, "pps", (features or {}).get("pps", 0.0)), 0.0)
+        bps = _safe_float_num(_row_get(row, "bps", (features or {}).get("bps", 0.0)), 0.0)
+        session["pps_sum"] += pps
+        session["bps_sum"] += bps
+        session["pps_peak"] = max(session["pps_peak"], pps)
+        session["bps_peak"] = max(session["bps_peak"], bps)
+        session["uniq_src_max"] = max(session["uniq_src_max"], _safe_int(_row_get(row, "uniq_src", (features or {}).get("uniq_src", 0)), 0))
+        session["uniq_flow5_max"] = max(
+            session["uniq_flow5_max"], _safe_int(_row_get(row, "uniq_flow5", (features or {}).get("uniq_flow5", 0)), 0)
+        )
+
+        src_pairs = _row_source_pairs(row, features)
+        dport_pairs = _row_dport_pairs(row, features)
+
+        _merge_pairs(session["top_src_map"], src_pairs)
+        _merge_pairs(session["top_dport_map"], dport_pairs)
+
+        src_window_total = 0.0
+        seen_src = set()
+        for ip, cnt in src_pairs:
+            cnt = max(0.0, float(cnt or 0.0))
+            src_window_total += cnt
+            seen_src.add(ip)
+            item = session["source_map"].setdefault(
+                ip,
+                {
+                    "first_ts": ts,
+                    "last_ts": ts,
+                    "window_hits": 0,
+                    "packet_est": 0.0,
+                    "max_window_packets": 0.0,
+                },
+            )
+            item["first_ts"] = min(float(item.get("first_ts", ts) or ts), ts)
+            item["last_ts"] = max(float(item.get("last_ts", ts) or ts), ts)
+            item["packet_est"] = float(item.get("packet_est", 0.0) or 0.0) + cnt
+            item["max_window_packets"] = max(float(item.get("max_window_packets", 0.0) or 0.0), cnt)
+        for ip in seen_src:
+            session["source_map"][ip]["window_hits"] = int(session["source_map"][ip].get("window_hits", 0) or 0) + 1
+        session["packet_est"] += src_window_total
+
+    out = [_build_session_summary(session, topn=topn) for session in sessions]
+    out.sort(key=lambda x: (float(x.get("end_ts", 0.0) or 0.0), float(x.get("start_ts", 0.0) or 0.0)), reverse=True)
+    return out
+
+
 def _build_event_filters(table: str, label: str, attack_type: str):
     where = []
     params = []
@@ -454,6 +727,118 @@ def api_events_bucket_details():
             }
         )
     return jsonify(out)
+
+
+@app.get("/api/alert_sessions")
+def api_alert_sessions():
+    path = Path(request.args.get("db", str(DEFAULT_DB)))
+    table = str(request.args.get("table", "alerts")).strip().lower()
+    if table not in ("events", "alerts"):
+        table = "alerts"
+    try:
+        limit = max(1, min(int(request.args.get("limit", "200")), 1000))
+    except (TypeError, ValueError):
+        limit = 200
+    try:
+        minutes = max(1, int(request.args.get("minutes", "60")))
+    except (TypeError, ValueError):
+        minutes = 60
+    try:
+        merge_gap_sec = max(1, float(request.args.get("merge_gap_sec", "30")))
+    except (TypeError, ValueError):
+        merge_gap_sec = 30.0
+    try:
+        topn = max(1, min(int(request.args.get("topn", "8")), 50))
+    except (TypeError, ValueError):
+        topn = 8
+    label = request.args.get("label", "").strip()
+    attack_type = request.args.get("attack_type", "").strip()
+    since_ts = time.time() - (minutes * 60)
+
+    where, params = _build_event_filters(table, label, attack_type)
+    sql = (
+        f"SELECT ts, label, attack_type, final_label, final_attack_type, decision_source, "
+        f"pps, bps, uniq_src, uniq_flow5, top_src_ip, top_dport, features "
+        f"FROM {table}"
+    )
+    if where:
+        sql += " WHERE " + " AND ".join(where) + " AND ts >= ?"
+    else:
+        sql += " WHERE ts >= ?"
+    params.append(since_ts)
+    sql += " ORDER BY ts ASC"
+
+    conn = get_db(path)
+    try:
+        try:
+            rows = conn.execute(sql, params).fetchall()
+        except sqlite3.OperationalError:
+            rows = []
+    finally:
+        conn.close()
+
+    sessions = _build_alert_sessions(rows, merge_gap_sec=merge_gap_sec, topn=topn)
+    return jsonify(sessions[:limit])
+
+
+@app.get("/api/alert_session_sources")
+def api_alert_session_sources():
+    path = Path(request.args.get("db", str(DEFAULT_DB)))
+    table = str(request.args.get("table", "alerts")).strip().lower()
+    if table not in ("events", "alerts"):
+        table = "alerts"
+    attack_type = request.args.get("attack_type", "").strip().upper()
+    dst_ip = request.args.get("dst_ip", "").strip()
+    dst_port = request.args.get("dst_port", "").strip()
+    label = request.args.get("label", "").strip().lower()
+    try:
+        start_ts = float(request.args.get("start_ts", "0") or 0.0)
+    except (TypeError, ValueError):
+        start_ts = 0.0
+    try:
+        end_ts = float(request.args.get("end_ts", "0") or 0.0)
+    except (TypeError, ValueError):
+        end_ts = 0.0
+    try:
+        topn = max(1, min(int(request.args.get("topn", "100")), 500))
+    except (TypeError, ValueError):
+        topn = 100
+    if start_ts <= 0 or end_ts <= 0:
+        return jsonify([])
+
+    sql = (
+        f"SELECT ts, label, attack_type, final_label, final_attack_type, decision_source, "
+        f"pps, bps, uniq_src, uniq_flow5, top_src_ip, top_dport, features "
+        f"FROM {table} WHERE ts >= ? AND ts <= ? ORDER BY ts ASC"
+    )
+
+    conn = get_db(path)
+    try:
+        try:
+            rows = conn.execute(sql, (start_ts, end_ts)).fetchall()
+        except sqlite3.OperationalError:
+            rows = []
+    finally:
+        conn.close()
+
+    matched = []
+    for row, features, split_scope, row_label, row_type in _selected_alert_rows(rows):
+        row_dst_ip, row_dst_port = _row_target_signature(row, features)
+        if label and row_label != label:
+            continue
+        if attack_type and row_type != attack_type:
+            continue
+        if dst_ip and row_dst_ip != dst_ip:
+            continue
+        if dst_port and row_dst_port != dst_port:
+            continue
+        matched.append(row)
+
+    sessions = _build_alert_sessions(matched, merge_gap_sec=max(1.0, end_ts - start_ts + 1.0), topn=max(8, topn))
+    if not sessions:
+        return jsonify([])
+    source_rows = sessions[0].get("source_details", []) or []
+    return jsonify(source_rows[:topn])
 
 
 @app.get("/api/series")
